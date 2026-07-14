@@ -12,7 +12,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates chromium curl fonts-noto-cjk tini \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 search \
-    && mkdir -p /data/chrome-profile /data/bing-profile /data/debug \
+    && mkdir -p /data/chrome-profile /data/bing-profile /data/brave-profile /data/read-profile /data/provider-manifests /data/trace /data/debug \
     && chown -R search:search /data
 
 COPY --from=builder /out/search-api /usr/local/bin/search-api

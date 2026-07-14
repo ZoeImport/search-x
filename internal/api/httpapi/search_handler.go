@@ -163,7 +163,8 @@ func statusForCode(code domain.ErrorCode) int {
 		return http.StatusTooManyRequests
 	case domain.ErrUpstreamChanged:
 		return http.StatusBadGateway
-	case domain.ErrCaptchaRequired, domain.ErrProviderUnavailable:
+	case domain.ErrCaptchaRequired, domain.ErrProviderUnavailable, domain.ErrProviderBusy,
+		domain.ErrProviderCapacityExhausted, domain.ErrSearchQueueFull, domain.ErrTracePersistenceUnavailable:
 		return http.StatusServiceUnavailable
 	case domain.ErrUpstreamTimeout, domain.ErrFetchTimeout:
 		return http.StatusGatewayTimeout

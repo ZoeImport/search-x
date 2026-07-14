@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -99,6 +100,27 @@ func TestSessionTransportBootstrapsCookieAndKeepsFixedHeaders(t *testing.T) {
 	}
 	if len(pacer.previous) != 3 || !pacer.previous[0].IsZero() || pacer.previous[1].IsZero() || pacer.previous[2].IsZero() {
 		t.Fatalf("pacer previous=%v", pacer.previous)
+	}
+}
+
+func TestHTTPSessionClientFactoryCreatesIndependentCookieJars(t *testing.T) {
+	factory := NewHTTPSessionClientFactory(http.DefaultTransport)
+	first, err := factory.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := factory.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	urlValue, _ := url.Parse("https://www.baidu.com/")
+	first.Jar.SetCookies(urlValue, []*http.Cookie{{Name: "BAIDUID", Value: "first"}})
+	if cookies := second.Jar.Cookies(urlValue); len(cookies) != 0 {
+		t.Fatalf("cookie leaked: %v", cookies)
+	}
+	second.Jar.SetCookies(urlValue, []*http.Cookie{{Name: "BAIDUID", Value: "second"}})
+	if got := first.Jar.Cookies(urlValue)[0].Value; got != "first" {
+		t.Fatalf("first jar mutated: %s", got)
 	}
 }
 

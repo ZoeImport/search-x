@@ -89,6 +89,15 @@ const (
 // WarningCode identifies a stable non-fatal search warning.
 type WarningCode string
 
+// RouteReason explains why a Provider was selected.
+type RouteReason string
+
+const (
+	RouteReasonExplicit     RouteReason = "explicit"
+	RouteReasonPriority     RouteReason = "priority"
+	RouteReasonRetryReroute RouteReason = "retry_reroute"
+)
+
 const (
 	// WarningCodeArtifactSaveError indicates a debug artifact persistence failure.
 	WarningCodeArtifactSaveError WarningCode = "artifact_save_error"
@@ -131,6 +140,9 @@ type Warning struct {
 type Attempt struct {
 	// Provider identifies the provider that made this upstream attempt.
 	Provider          ProviderName        `json:"provider,omitempty"`
+	ProfileID         string              `json:"profile_id,omitempty"`
+	LeaseID           string              `json:"lease_id,omitempty"`
+	RouteRound        int                 `json:"route_round,omitempty"`
 	Strategy          BaiduStrategyName   `json:"strategy,omitempty"`
 	Transport         TransportName       `json:"transport"`
 	HeaderProfile     string              `json:"header_profile,omitempty"`
@@ -160,10 +172,14 @@ type Meta struct {
 	Degraded          bool              `json:"degraded"`
 	FallbackCount     int               `json:"fallback_count"`
 	// ProviderFallbackCount records cross-provider fallback transitions.
-	ProviderFallbackCount int    `json:"provider_fallback_count"`
-	TookMS                int64  `json:"took_ms"`
-	RequestID             string `json:"request_id"`
-	CacheAgeSeconds       int64  `json:"cache_age_seconds,omitempty"`
+	ProviderFallbackCount int          `json:"provider_fallback_count"`
+	SelectedProvider      ProviderName `json:"selected_provider,omitempty"`
+	RouteReason           RouteReason  `json:"route_reason,omitempty"`
+	ProfileID             string       `json:"profile_id,omitempty"`
+	ProviderQueueMS       int64        `json:"provider_queue_ms,omitempty"`
+	TookMS                int64        `json:"took_ms"`
+	RequestID             string       `json:"request_id"`
+	CacheAgeSeconds       int64        `json:"cache_age_seconds,omitempty"`
 }
 
 type Debug struct {

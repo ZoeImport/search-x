@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,6 +27,71 @@ type debugAwareProvider struct {
 	calls   atomic.Int32
 	started chan bool
 	release chan struct{}
+}
+
+type scopeProvider struct{ seen domain.RequestScope }
+
+func (*scopeProvider) Name() domain.ProviderName { return domain.ProviderNameBaidu }
+func (provider *scopeProvider) Search(ctx context.Context, _ domain.SearchRequest) (domain.SearchResponse, error) {
+	provider.seen, _ = domain.RequestScopeFrom(ctx)
+	return domain.SearchResponse{Provider: domain.ProviderNameBaidu, Results: []domain.SearchResult{{Title: "ok"}}}, nil
+}
+
+type concurrencyProvider struct{ active, maximum atomic.Int32 }
+
+func (*concurrencyProvider) Name() domain.ProviderName { return domain.ProviderNameBaidu }
+func (provider *concurrencyProvider) Search(ctx context.Context, _ domain.SearchRequest) (domain.SearchResponse, error) {
+	current := provider.active.Add(1)
+	for {
+		observed := provider.maximum.Load()
+		if current <= observed || provider.maximum.CompareAndSwap(observed, current) {
+			break
+		}
+	}
+	select {
+	case <-time.After(10 * time.Millisecond):
+	case <-ctx.Done():
+	}
+	provider.active.Add(-1)
+	return domain.SearchResponse{Provider: domain.ProviderNameBaidu, Results: []domain.SearchResult{{Title: "ok"}}}, nil
+}
+
+func TestSearchServiceBoundsOneHundredConcurrentRequests(t *testing.T) {
+	provider := &concurrencyProvider{}
+	service, _ := newServiceForTest(t, provider, time.Now)
+	service.ConfigureLiveGuard(23, 100)
+	var wait sync.WaitGroup
+	errorsSeen := make(chan error, 100)
+	for index := 0; index < 100; index++ {
+		wait.Add(1)
+		go func(value int) {
+			defer wait.Done()
+			_, err := service.Search(context.Background(), domain.SearchRequest{Query: fmt.Sprintf("query-%d", value), Provider: domain.ProviderNameBaidu, RequestID: fmt.Sprintf("request-%d", value)})
+			errorsSeen <- err
+		}(index)
+	}
+	wait.Wait()
+	close(errorsSeen)
+	for err := range errorsSeen {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if maximum := provider.maximum.Load(); maximum > 23 || maximum < 2 {
+		t.Fatalf("maximum=%d", maximum)
+	}
+}
+
+func TestSearchServiceCarriesRequestScopeToProvider(t *testing.T) {
+	provider := &scopeProvider{}
+	service, _ := newServiceForTest(t, provider, time.Now)
+	_, err := service.Search(context.Background(), domain.SearchRequest{Query: "scope", Provider: domain.ProviderNameBaidu, RequestID: "request-scope"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.seen.RequestID != "request-scope" || provider.seen.TraceID != "request-scope" {
+		t.Fatalf("scope=%+v", provider.seen)
+	}
 }
 
 func (p *debugAwareProvider) Name() domain.ProviderName { return domain.ProviderNameBaidu }
@@ -92,6 +158,40 @@ func TestSearchServiceCoalescesSameQuery(t *testing.T) {
 	wg.Wait()
 	if got := p.calls.Load(); got != 1 {
 		t.Fatalf("provider calls=%d", got)
+	}
+}
+
+func TestSearchServiceBoundsLiveInflightAndQueue(t *testing.T) {
+	p := &countingProvider{started: make(chan struct{}, 3), release: make(chan struct{}), result: domain.SearchResponse{Provider: "baidu", Results: []domain.SearchResult{{Title: "ok"}}}}
+	service, _ := newServiceForTest(t, p, time.Now)
+	service.ConfigureLiveGuard(1, 1)
+	done := make(chan error, 2)
+	for _, query := range []string{"first", "second"} {
+		go func(value string) {
+			_, err := service.Search(context.Background(), domain.SearchRequest{Query: value, Provider: "baidu", RequestID: value})
+			done <- err
+		}(query)
+		if query == "first" {
+			<-p.started
+		}
+	}
+	deadline := time.Now().Add(time.Second)
+	for service.queued.Load() != 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	_, err := service.Search(context.Background(), domain.SearchRequest{Query: "third", Provider: "baidu", RequestID: "third"})
+	var searchErr *domain.SearchError
+	if !errors.As(err, &searchErr) || searchErr.Code != domain.ErrSearchQueueFull {
+		t.Fatalf("err=%v", err)
+	}
+	close(p.release)
+	for range 2 {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if maximum := p.calls.Load(); maximum != 2 {
+		t.Fatalf("provider calls=%d", maximum)
 	}
 }
 

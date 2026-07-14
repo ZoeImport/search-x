@@ -41,6 +41,22 @@ func testRouterWithOptions(t *testing.T, searcher Searcher, options Options) *gi
 	return router
 }
 
+func TestReadinessEndpointUsesRuntimeState(t *testing.T) {
+	ready := false
+	router := testRouterWithOptions(t, &fakeSearcher{}, Options{Ready: func() bool { return ready }, TotalTimeout: time.Second, ClientRate: 100, ClientBurst: 100})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d", response.Code)
+	}
+	ready = true
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d", response.Code)
+	}
+}
+
 func TestSearchRefreshAndAuthorizedDebug(t *testing.T) {
 	searcher := &fakeSearcher{response: domain.SearchResponse{
 		Debug: &domain.Debug{Attempts: []domain.Attempt{{Transport: "desktop_http"}}},

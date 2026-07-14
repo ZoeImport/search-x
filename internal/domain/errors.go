@@ -18,6 +18,14 @@ const (
 	ErrCaptchaRequired ErrorCode = "captcha_required"
 	// ErrProviderUnavailable indicates a Provider transport or service failure.
 	ErrProviderUnavailable ErrorCode = "provider_unavailable"
+	// ErrProviderBusy indicates an explicit Provider has no lease before its wait budget expires.
+	ErrProviderBusy ErrorCode = "provider_busy"
+	// ErrProviderCapacityExhausted indicates automatic routing found no Provider capacity.
+	ErrProviderCapacityExhausted ErrorCode = "provider_capacity_exhausted"
+	// ErrSearchQueueFull indicates the bounded live-search queue rejected the request.
+	ErrSearchQueueFull ErrorCode = "search_queue_full"
+	// ErrTracePersistenceUnavailable indicates strict trace persistence cannot accept new events.
+	ErrTracePersistenceUnavailable ErrorCode = "trace_persistence_unavailable"
 	// ErrUpstreamTimeout indicates that upstream search exceeded its deadline.
 	ErrUpstreamTimeout ErrorCode = "upstream_timeout"
 	// ErrInsufficientReadableResults indicates that no candidate produced usable content.

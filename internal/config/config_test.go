@@ -36,6 +36,13 @@ func TestLoadDefaults(t *testing.T) {
 	if got.ProviderBrowserSlots != 2 || got.ReadBrowserSlots != 3 {
 		t.Fatalf("browser slots=%#v", got)
 	}
+	if got.BaiduProfileCount != 6 || got.BaiduProfileCapacity != 1 || got.BingProfileCount != 5 || got.BingProfileCapacity != 2 ||
+		got.BraveProfileCount != 3 || got.BraveProfileCapacity != 1 || got.DuckDuckGoProfileCount != 4 || got.DuckDuckGoProfileCapacity != 1 {
+		t.Fatalf("provider profiles=%#v", got)
+	}
+	if got.AutoRouteWait != 2*time.Second || got.ExplicitRouteWait != 5*time.Second || got.MaxProviderAttempts != 3 || got.MinimumAttemptBudget != 3*time.Second {
+		t.Fatalf("routing=%#v", got)
+	}
 	if got.ContentTimeout != 30*time.Second {
 		t.Fatalf("content timeout=%s", got.ContentTimeout)
 	}

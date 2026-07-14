@@ -1,48 +1,50 @@
 services:
   search-api:
     build: .
-    ports:
-      - "8080:8080"
+    user: "0:0"
     environment:
       SEARCH_ADDR: ":8080"
-      SEARCH_DEBUG: "${SEARCH_DEBUG:-true}"
-      SEARCH_DEBUG_TOKEN: "${SEARCH_DEBUG_TOKEN:-}"
-      SEARCH_DEBUG_DIR: "/data/debug"
-      SEARCH_CHROME_PROFILE_DIR: "/data/chrome-profile"
-      SEARCH_BING_PROFILE_DIR: "/data/bing-profile"
-      SEARCH_BRAVE_PROFILE_DIR: "/data/brave-profile"
-      SEARCH_READ_CHROME_PROFILE_DIR: "/data/read-profile"
-      SEARCH_CHROME_PATH: "/usr/bin/chromium"
-      SEARCH_CHROME_HEADLESS: "true"
+      SEARCH_TRACE_ENABLED: "true"
+      SEARCH_TRACE_ROOT: /data/trace
+      SEARCH_TRACE_FAILURE_MODE: strict
+      SEARCH_DEBUG_DIR: /data/debug
+      SEARCH_PROFILE_MANIFEST_ROOT: /data/provider-manifests
+      SEARCH_CHROME_PROFILE_DIR: /data/chrome-profile
+      SEARCH_BING_PROFILE_DIR: /data/bing-profile
+      SEARCH_BRAVE_PROFILE_DIR: /data/brave-profile
+      SEARCH_READ_CHROME_PROFILE_DIR: /data/read-profile
+      SEARCH_CHROME_PATH: /usr/bin/chromium
       SEARCH_CHROME_NO_SANDBOX: "true"
-      SEARCH_PROVIDER_RATE: "1"
-      SEARCH_PROVIDER_BURST: "3"
-      SEARCH_PROVIDER_BROWSER_SLOTS: "2"
-      SEARCH_READ_BROWSER_SLOTS: "3"
-      SEARCH_CONTENT_TIMEOUT: "30s"
-      SEARCH_JITTER_MIN: "200ms"
-      SEARCH_JITTER_MAX: "800ms"
-      SEARCH_BAIDU_SESSION_MIN_INTERVAL: "3s"
-      SEARCH_BAIDU_SESSION_JITTER_MAX: "2s"
-      SEARCH_BAIDU_CAPTCHA_COOLDOWN: "30m"
-      SEARCH_BAIDU_RATE_LIMIT_COOLDOWN: "5m"
-      SEARCH_BAIDU_FALLBACK_RESERVE: "5s"
+    ports:
+      - "18080:8080"
     volumes:
-      - chrome-profile:/data/chrome-profile
-      - bing-profile:/data/bing-profile
-      - brave-profile:/data/brave-profile
-      - read-profile:/data/read-profile
-      - debug-artifacts:/data/debug
+      - search-trace-data:/data/trace
+      - provider-profile-data:/data/provider-manifests
+      - browser-profile-data:/data
+    depends_on:
+      trace-sqlite:
+        condition: service_healthy
+    restart: unless-stopped
+
+  trace-sqlite:
+    image: keinos/sqlite3:latest
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        mkdir -p /data/trace
+        sqlite3 /data/trace/search-trace.db 'PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;'
+        exec tail -f /dev/null
+    volumes:
+      - search-trace-data:/data/trace
     healthcheck:
-      test: ["CMD", "curl", "--fail", "http://127.0.0.1:8080/healthz"]
-      interval: 10s
+      test: ["CMD-SHELL", "sqlite3 /data/trace/search-trace.db 'PRAGMA quick_check;' | grep -qx ok"]
+      interval: 5s
       timeout: 3s
-      retries: 5
+      retries: 10
     restart: unless-stopped
 
 volumes:
-  chrome-profile: {}
-  bing-profile: {}
-  brave-profile: {}
-  read-profile: {}
-  debug-artifacts: {}
+  search-trace-data:
+  provider-profile-data:
+  browser-profile-data:

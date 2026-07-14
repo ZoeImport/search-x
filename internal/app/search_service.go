@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -12,6 +13,7 @@ import (
 
 	"web-search-backend/internal/domain"
 	"web-search-backend/internal/provider"
+	"web-search-backend/internal/searchtrace"
 )
 
 type Cache interface {
@@ -21,10 +23,25 @@ type Cache interface {
 }
 
 type SearchService struct {
-	registry *provider.Registry
-	cache    Cache
-	now      func() time.Time
-	group    singleflight.Group
+	registry  *provider.Registry
+	cache     Cache
+	now       func() time.Time
+	group     singleflight.Group
+	tracer    *searchtrace.Manager
+	liveSlots chan struct{}
+	queueMax  int64
+	queued    atomic.Int64
+}
+
+func (s *SearchService) SetTracer(tracer *searchtrace.Manager) { s.tracer = tracer }
+
+func (s *SearchService) ConfigureLiveGuard(inflightMax, queueMax int) {
+	if inflightMax > 0 {
+		s.liveSlots = make(chan struct{}, inflightMax)
+	}
+	if queueMax > 0 {
+		s.queueMax = int64(queueMax)
+	}
 }
 
 func NewSearchService(registry *provider.Registry, cache Cache, now func() time.Time) *SearchService {
@@ -40,6 +57,10 @@ func (s *SearchService) Search(ctx context.Context, request domain.SearchRequest
 	if err != nil {
 		return domain.SearchResponse{}, err
 	}
+	ctx = domain.WithRequestScope(ctx, domain.RequestScope{TraceID: normalized.RequestID, RequestID: normalized.RequestID})
+	if err := s.trace(ctx, normalized, "request_started", nil); err != nil {
+		return domain.SearchResponse{}, err
+	}
 	selected, ok := s.registry.Get(normalized.Provider)
 	if !ok {
 		original := fmt.Errorf("provider %q is not registered", normalized.Provider)
@@ -50,6 +71,7 @@ func (s *SearchService) Search(ctx context.Context, request domain.SearchRequest
 	key := cacheKey(normalized)
 	if !normalized.Refresh {
 		if cached, ok := s.cache.GetFresh(ctx, key); ok {
+			_ = s.trace(ctx, normalized, "cache_hit", map[string]any{"cache_state": "fresh"})
 			return s.prepareFresh(cached, normalized.Provider, normalized.RequestID, started), nil
 		}
 	}
@@ -64,6 +86,11 @@ func (s *SearchService) Search(ctx context.Context, request domain.SearchRequest
 				return cached, nil
 			}
 		}
+		release, acquireErr := s.acquireLive(ctx)
+		if acquireErr != nil {
+			return domain.SearchResponse{}, acquireErr
+		}
+		defer release()
 		response, providerErr := selected.Search(ctx, normalized)
 		if providerErr == nil {
 			if response.Meta.RequestedProvider == "" {
@@ -96,6 +123,7 @@ func (s *SearchService) Search(ctx context.Context, request domain.SearchRequest
 		}
 	case result := <-resultChannel:
 		if result.Err != nil {
+			_ = s.trace(ctx, normalized, "request_failed", map[string]any{"error": result.Err.Error()})
 			return domain.SearchResponse{}, result.Err
 		}
 		response, ok := result.Val.(domain.SearchResponse)
@@ -106,8 +134,47 @@ func (s *SearchService) Search(ctx context.Context, request domain.SearchRequest
 		if response.Meta.RequestID == "" || response.Meta.Transport == "fresh_cache" {
 			response.Meta.RequestID = normalized.RequestID
 		}
+		if err := s.trace(ctx, normalized, "request_finished", map[string]any{"selected_provider": response.Provider, "result_count": len(response.Results), "cached": response.Meta.Cached, "total_ms": response.Meta.TookMS}); err != nil {
+			return domain.SearchResponse{}, err
+		}
 		return response, nil
 	}
+}
+
+func (s *SearchService) acquireLive(ctx context.Context) (func(), error) {
+	if s.liveSlots == nil {
+		return func() {}, nil
+	}
+	select {
+	case s.liveSlots <- struct{}{}:
+		return func() { <-s.liveSlots }, nil
+	default:
+	}
+	queued := s.queued.Add(1)
+	if queued > s.queueMax {
+		s.queued.Add(-1)
+		return nil, &domain.SearchError{Code: domain.ErrSearchQueueFull, Message: "实时搜索队列已满", Retryable: true}
+	}
+	select {
+	case s.liveSlots <- struct{}{}:
+		s.queued.Add(-1)
+		return func() { <-s.liveSlots }, nil
+	case <-ctx.Done():
+		s.queued.Add(-1)
+		return nil, &domain.SearchError{Code: domain.ErrUpstreamTimeout, Message: "等待实时搜索执行槽超时", Retryable: true, Original: ctx.Err()}
+	}
+}
+
+func (s *SearchService) trace(ctx context.Context, request domain.SearchRequest, eventType string, fields map[string]any) error {
+	if s.tracer == nil {
+		return nil
+	}
+	hash, length, preview, stored := s.tracer.QueryMetadata(request.Query)
+	err := s.tracer.Append(ctx, searchtrace.Event{TraceID: request.RequestID, RequestID: request.RequestID, Type: eventType, RequestedProvider: string(request.Provider), QueryHash: hash, QueryLength: length, QueryPreview: preview, Query: stored, Fields: fields})
+	if err == nil {
+		return nil
+	}
+	return &domain.SearchError{Code: domain.ErrTracePersistenceUnavailable, Message: "搜索链路记录暂不可用", Retryable: true, Original: err}
 }
 
 func (s *SearchService) prepareFresh(response domain.SearchResponse, requestedProvider domain.ProviderName, requestID string, started time.Time) domain.SearchResponse {

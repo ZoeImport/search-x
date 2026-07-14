@@ -1,7 +1,9 @@
 package bootstrap
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +14,8 @@ import (
 
 	"web-search-backend/internal/config"
 	"web-search-backend/internal/domain"
+	"web-search-backend/internal/profilepool"
+	"web-search-backend/internal/searchtrace"
 )
 
 func TestNewBuildsEndToEndOfflineSearchApp(t *testing.T) {
@@ -45,11 +49,13 @@ func TestNewBuildsEndToEndOfflineSearchApp(t *testing.T) {
 	temp := t.TempDir()
 	cfg := config.Config{
 		Debug: true, DebugDir: filepath.Join(temp, "debug"), DebugPreviewBytes: 32 * 1024,
+		ProfileManifestRoot:   filepath.Join(temp, "provider-manifests"),
+		CapacityRouterEnabled: true, ProfilePoolEnabled: true,
 		ChromeProfileDir: filepath.Join(temp, "profile"), BingProfileDir: filepath.Join(temp, "bing-profile"), BraveProfileDir: filepath.Join(temp, "brave-profile"), ChromeHeadless: true,
 		DesktopURL: upstream.URL, MobileURL: upstream.URL,
 		UserAgent:     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7871.115 Safari/537.36",
 		DuckDuckGoURL: upstream.URL, BingURL: "https://www.bing.com/search", BraveURL: "https://search.brave.com/search",
-		TotalTimeout: 2 * time.Second, DesktopTimeout: time.Second, MobileTimeout: time.Second, ChromeTimeout: time.Second,
+		TotalTimeout: 5 * time.Second, DesktopTimeout: time.Second, MobileTimeout: time.Second, ChromeTimeout: time.Second,
 		DuckDuckGoTimeout: time.Second, BingTimeout: time.Second, BraveTimeout: time.Second, ProviderBrowserSlots: 2,
 		FreshTTL: time.Minute, StaleTTL: time.Hour, ProviderRate: 1000, ProviderBurst: 100,
 		BaiduSessionMinInterval: time.Nanosecond, BaiduSessionMaxJitter: 0,
@@ -75,7 +81,7 @@ func TestNewBuildsEndToEndOfflineSearchApp(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if response.Provider != "baidu" || response.Meta.Transport != "desktop_http" || len(response.Results) != 2 {
+	if response.Provider != "baidu" || response.Meta.Transport != domain.TransportNameBaiduSessionHTTP || len(response.Results) != 2 {
 		t.Fatalf("response=%#v", response)
 	}
 	if response.Meta.RequestedProvider != domain.ProviderNameAuto {
@@ -133,4 +139,75 @@ func TestNewBuildsEndToEndOfflineSearchApp(t *testing.T) {
 		len(combinedResponse.Results) != 1 || !strings.Contains(combinedResponse.Results[0].Content, "正文内容") {
 		t.Fatalf("combined response=%#v", combinedResponse)
 	}
+}
+
+func TestBrowserPoolFactoryUsesDistinctProfileDirectories(t *testing.T) {
+	root := t.TempDir()
+	var directories []string
+	pool, err := buildBrowserPool(domain.ProviderNameBing, 5, 2, filepath.Join(root, "profiles"), filepath.Join(root, "manifests"), 100, 100, func(profileDir string) (profilepool.Searcher, func() error, error) {
+		directories = append(directories, profileDir)
+		return &fakeProfileSearcher{provider: domain.ProviderNameBing}, func() error { return nil }, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	seen := map[string]bool{}
+	for _, directory := range directories {
+		seen[directory] = true
+	}
+	if len(directories) != 5 || len(seen) != 5 {
+		t.Fatalf("directories=%v", directories)
+	}
+	for index := 1; index <= 5; index++ {
+		expected := filepath.Join(root, "profiles", fmt.Sprintf("bing-%04d", index))
+		if !seen[expected] {
+			t.Fatalf("missing %s", expected)
+		}
+	}
+}
+
+type fakeProfileSearcher struct{ provider domain.ProviderName }
+
+func (searcher *fakeProfileSearcher) Name() domain.ProviderName { return searcher.provider }
+func (searcher *fakeProfileSearcher) Search(context.Context, domain.SearchRequest) (domain.SearchResponse, error) {
+	return domain.SearchResponse{Provider: searcher.provider}, nil
+}
+
+func TestStrictTraceFailureMakesRuntimeNotReady(t *testing.T) {
+	root := t.TempDir()
+	spool, err := searchtrace.OpenSpool(filepath.Join(root, "spool"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := searchtrace.OpenStore(filepath.Join(root, "trace.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracer, err := searchtrace.NewManager(spool, store, searchtrace.ManagerConfig{FailureMode: searchtrace.FailureModeStrict})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := profilepool.NewProviderProfile("ready", 1, &fakeProfileSearcher{provider: domain.ProviderNameBaidu}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := profilepool.New([]profilepool.Profile{profile}, profilepool.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeValue := &searchRuntime{pools: []*profilepool.Pool{pool}, tracer: tracer}
+	if !runtimeValue.Ready() {
+		t.Fatal("runtime should initially be ready")
+	}
+	if err := spool.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := tracer.Append(context.Background(), searchtrace.Event{TraceID: "failed", RequestID: "failed", Type: "request_started"}); err == nil {
+		t.Fatal("expected strict append error")
+	}
+	if runtimeValue.Ready() {
+		t.Fatal("strict trace failure must fail readiness")
+	}
+	_ = tracer.Close()
 }

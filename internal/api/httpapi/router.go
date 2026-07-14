@@ -33,6 +33,8 @@ type ContentSearcher interface {
 
 // Options configures HTTP routing, diagnostics, rate limiting, and reading.
 type Options struct {
+	// Ready reports whether at least one search profile and required persistence are available.
+	Ready func() bool
 	// Reader enables the single-URL read endpoint.
 	Reader Reader
 	// ContentSearcher enables combined search and readable-body orchestration.
@@ -102,6 +104,13 @@ func NewRouter(searcher Searcher, options Options) (*gin.Engine, error) {
 	)
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
+	})
+	router.GET("/readyz", func(c *gin.Context) {
+		if options.Ready != nil && !options.Ready() {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ready"})
 	})
 	router.GET("/", func(c *gin.Context) {
 		c.Redirect(http.StatusTemporaryRedirect, "/ui/")

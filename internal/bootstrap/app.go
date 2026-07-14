@@ -2,13 +2,10 @@ package bootstrap
 
 import (
 	"fmt"
-	"net/http"
-	"net/http/cookiejar"
 	"net/url"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"golang.org/x/time/rate"
 
 	"web-search-backend/internal/api/httpapi"
 	"web-search-backend/internal/app"
@@ -17,11 +14,6 @@ import (
 	"web-search-backend/internal/debugartifact"
 	"web-search-backend/internal/domain"
 	"web-search-backend/internal/headerprofile"
-	"web-search-backend/internal/provider"
-	"web-search-backend/internal/provider/baidu"
-	"web-search-backend/internal/provider/bing"
-	"web-search-backend/internal/provider/brave"
-	"web-search-backend/internal/provider/duckduckgo"
 	readpipe "web-search-backend/internal/read"
 	readcache "web-search-backend/internal/read/cache"
 	"web-search-backend/internal/read/converter"
@@ -30,11 +22,8 @@ import (
 	"web-search-backend/internal/read/quality"
 	readreader "web-search-backend/internal/read/reader"
 	"web-search-backend/internal/read/safeurl"
-	"web-search-backend/internal/resilience"
 	"web-search-backend/internal/searchquality"
-	"web-search-backend/internal/transport"
 	"web-search-backend/internal/transport/chromebrowser"
-	"web-search-backend/internal/transport/httpsearch"
 )
 
 // App owns the HTTP router and its shared browser resources.
@@ -53,164 +42,30 @@ func New(config config.Config) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	fixedBaiduProfile, err := headerprofile.NewBaiduFixedSessionProfile(config.UserAgent)
+	searchRuntime, err := newSearchRuntime(config, artifactStore, headerProfiles)
 	if err != nil {
-		return nil, fmt.Errorf("select fixed Baidu header profile: %w", err)
-	}
-	pooledBaiduJar, err := cookiejar.New(nil)
-	if err != nil {
-		return nil, fmt.Errorf("create cookie jar: %w", err)
-	}
-	baseTransport := http.DefaultTransport.(*http.Transport).Clone()
-	baseTransport.MaxIdleConns = 20
-	baseTransport.MaxIdleConnsPerHost = 4
-	baseTransport.IdleConnTimeout = 90 * time.Second
-	baiduHTTPClient := &http.Client{Transport: baseTransport, Jar: pooledBaiduJar}
-	duckDuckGoHTTPClient := &http.Client{Transport: baseTransport}
-
-	desktopClient, err := httpsearch.New(httpsearch.Config{
-		Name: domain.TransportNameDesktopHTTP, BaseURL: config.DesktopURL, Referer: origin(config.DesktopURL),
-		UserAgent: config.UserAgent, Timeout: config.DesktopTimeout, MaxBodyBytes: config.MaxBodyBytes, HeaderProfiles: headerProfiles,
-	}, baiduHTTPClient)
-	if err != nil {
-		return nil, fmt.Errorf("create desktop transport: %w", err)
-	}
-	mobileClient, err := httpsearch.New(httpsearch.Config{
-		Name: domain.TransportNameMobileHTTP, BaseURL: config.MobileURL, Referer: origin(config.MobileURL),
-		UserAgent: config.UserAgent, Timeout: config.MobileTimeout, MaxBodyBytes: config.MaxBodyBytes, HeaderProfiles: headerProfiles,
-	}, baiduHTTPClient)
-	if err != nil {
-		return nil, fmt.Errorf("create mobile transport: %w", err)
-	}
-	duckDuckGoProvider, err := duckduckgo.New(duckduckgo.Config{
-		BaseURL: config.DuckDuckGoURL, UserAgent: config.UserAgent,
-		Timeout: config.DuckDuckGoTimeout, MaxBodyBytes: config.MaxBodyBytes, HeaderProfiles: headerProfiles,
-	}, duckDuckGoHTTPClient)
-	if err != nil {
-		return nil, fmt.Errorf("create DuckDuckGo provider: %w", err)
-	}
-	chromeClient, err := chromebrowser.New(chromebrowser.Config{
-		ProfileDir: config.ChromeProfileDir, ExecPath: config.ChromePath,
-		Timeout: config.ChromeTimeout, Headless: config.ChromeHeadless, DisableSandbox: config.ChromeNoSandbox,
-		MaxBodyBytes: int(config.MaxBodyBytes), MaxConcurrentTabs: config.ProviderBrowserSlots,
-		HeaderProfiles: headerProfiles,
-	}, func(request domain.SearchRequest) (string, error) {
-		return baidu.BuildSearchURL(config.DesktopURL, request)
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create chromedp transport: %w", err)
-	}
-	bingChromeClient, err := chromebrowser.New(chromebrowser.Config{
-		ProfileDir: config.BingProfileDir, ExecPath: config.ChromePath,
-		Timeout: config.BingTimeout, Headless: config.ChromeHeadless, DisableSandbox: config.ChromeNoSandbox,
-		MaxBodyBytes: int(config.MaxBodyBytes), MaxConcurrentTabs: config.ProviderBrowserSlots,
-		HeaderProfiles: headerProfiles,
-	}, func(request domain.SearchRequest) (string, error) {
-		return bing.BuildSearchURL(config.BingURL, request)
-	})
-	if err != nil {
-		chromeClient.Close()
-		return nil, fmt.Errorf("create Bing chromedp transport: %w", err)
-	}
-	braveChromeClient, err := chromebrowser.New(chromebrowser.Config{
-		ProfileDir: config.BraveProfileDir, ExecPath: config.ChromePath,
-		Timeout: config.BraveTimeout, Headless: config.ChromeHeadless, DisableSandbox: config.ChromeNoSandbox,
-		MaxBodyBytes: int(config.MaxBodyBytes), MaxConcurrentTabs: config.ProviderBrowserSlots,
-		HeaderProfiles: headerProfiles,
-	}, func(request domain.SearchRequest) (string, error) {
-		return brave.BuildSearchURL(config.BraveURL, request)
-	})
-	if err != nil {
-		bingChromeClient.Close()
-		chromeClient.Close()
-		return nil, fmt.Errorf("create Brave chromedp transport: %w", err)
+		return nil, fmt.Errorf("create search runtime: %w", err)
 	}
 	var readChromeClient *chromebrowser.Client
-	closeBrowsers := func() {
+	closeResources := func() {
 		if readChromeClient != nil {
 			readChromeClient.Close()
 		}
-		braveChromeClient.Close()
-		bingChromeClient.Close()
-		chromeClient.Close()
-	}
-
-	transports := []transport.SearchTransport{desktopClient, mobileClient, chromeClient}
-	limiter := rate.NewLimiter(rate.Limit(config.ProviderRate), config.ProviderBurst)
-	jitter, err := resilience.NewJitter(config.JitterMin, config.JitterMax)
-	if err != nil {
-		closeBrowsers()
-		return nil, err
-	}
-	sessionPacer, err := baidu.NewFixedSessionPacer(config.BaiduSessionMinInterval, config.BaiduSessionMaxJitter, time.Now)
-	if err != nil {
-		closeBrowsers()
-		return nil, fmt.Errorf("create fixed Baidu session pacer: %w", err)
-	}
-	sessionTransport, err := baidu.NewSessionTransport(baidu.SessionConfig{
-		BootstrapURL: origin(config.DesktopURL), SearchURL: config.DesktopURL,
-		RequestTimeout: config.DesktopTimeout, MinInterval: config.BaiduSessionMinInterval,
-		MaxJitter: config.BaiduSessionMaxJitter, CaptchaCooldown: config.BaiduCaptchaCooldown,
-		RateLimitCooldown: config.BaiduRateLimitCooldown, FallbackReserve: config.BaiduFallbackReserve,
-		MaxBodyBytes: config.MaxBodyBytes,
-	}, fixedBaiduProfile, baidu.NewHTTPSessionClientFactory(baseTransport), sessionPacer, baidu.BaiduResponseClassifier{}, time.Now)
-	if err != nil {
-		closeBrowsers()
-		return nil, fmt.Errorf("create fixed Baidu session transport: %w", err)
-	}
-	strategyChain, err := baidu.NewStrategyChain(baidu.ConservativeStrategyFallback{},
-		baidu.StrategyStep{Name: domain.BaiduStrategyNameFixedSession, Transport: sessionTransport},
-		baidu.StrategyStep{Name: domain.BaiduStrategyNameHeaderPool, Transport: transports[0], Waiters: []baidu.Waiter{limiter, jitter}, UseBreaker: true},
-		baidu.StrategyStep{Name: domain.BaiduStrategyNameHeaderPool, Transport: transports[1], Waiters: []baidu.Waiter{limiter, jitter}, UseBreaker: true},
-		baidu.StrategyStep{Name: domain.BaiduStrategyNameHeaderPool, Transport: transports[2], Waiters: []baidu.Waiter{limiter, jitter}, UseBreaker: true},
-	)
-	if err != nil {
-		closeBrowsers()
-		return nil, fmt.Errorf("create Baidu strategy chain: %w", err)
-	}
-	baiduProvider, err := baidu.NewProvider(strategyChain, artifactStore, baidu.NewBreaker(time.Now))
-	if err != nil {
-		closeBrowsers()
-		return nil, fmt.Errorf("create Baidu provider: %w", err)
-	}
-	bingProvider, err := bing.New(bingChromeClient, artifactStore)
-	if err != nil {
-		closeBrowsers()
-		return nil, err
-	}
-	braveProvider, err := brave.New(braveChromeClient, artifactStore)
-	if err != nil {
-		closeBrowsers()
-		return nil, err
-	}
-	autoProvider, err := provider.NewChain(domain.ProviderNameAuto, baiduProvider, duckDuckGoProvider, bingProvider, braveProvider)
-	if err != nil {
-		closeBrowsers()
-		return nil, err
-	}
-	registry := provider.NewRegistry()
-	for _, searchProvider := range []provider.Provider{baiduProvider, duckDuckGoProvider, bingProvider, braveProvider, autoProvider} {
-		if err := registry.Register(searchProvider); err != nil {
-			closeBrowsers()
-			return nil, err
-		}
+		searchRuntime.Close()
 	}
 	memoryCache, err := cache.NewMemory(config.CacheMaxItems, config.FreshTTL, config.StaleTTL, time.Now)
 	if err != nil {
-		closeBrowsers()
+		closeResources()
 		return nil, err
 	}
-	searchService := app.NewSearchService(registry, memoryCache, time.Now)
+	searchService := app.NewSearchService(searchRuntime.registry, memoryCache, time.Now)
+	searchService.SetTracer(searchRuntime.tracer)
+	searchService.ConfigureLiveGuard(config.GlobalInflightMax, config.AutoQueueMax)
 	qualityEvaluator := searchquality.NewEvaluator(searchquality.DefaultConfig())
-	qualitySelector, err := app.NewQualityProviderSelector(searchService, qualityEvaluator, app.ProviderSelectorConfig{
-		Providers: []domain.ProviderName{
-			domain.ProviderNameBaidu, domain.ProviderNameBing, domain.ProviderNameBrave, domain.ProviderNameDuckDuckGo,
-		},
-		MaxConcurrent: 2, Budget: 10 * time.Second, EarlyScore: 0.8,
-	})
+	qualitySelector, err := app.NewSingleProviderSelector(searchService, qualityEvaluator)
 	if err != nil {
-		closeBrowsers()
-		return nil, fmt.Errorf("create quality Provider selector: %w", err)
+		closeResources()
+		return nil, fmt.Errorf("create single Provider selector: %w", err)
 	}
 
 	var readService *app.ReadService
@@ -222,7 +77,7 @@ func New(config config.Config) (*App, error) {
 			MaxRedirects: config.ReadMaxRedirects, UserAgent: config.UserAgent,
 		})
 		if err != nil {
-			closeBrowsers()
+			closeResources()
 			return nil, fmt.Errorf("create read HTTP reader: %w", err)
 		}
 		var browserReader readpipe.ResourceReader
@@ -237,33 +92,33 @@ func New(config config.Config) (*App, error) {
 				return request.Query, nil
 			})
 			if err != nil {
-				closeBrowsers()
+				closeResources()
 				return nil, fmt.Errorf("create read chromedp transport: %w", err)
 			}
 			browserReader, err = readreader.NewBrowserReader(readPolicy, readChromeClient, config.ReadMaxBodyBytes)
 			if err != nil {
-				closeBrowsers()
+				closeResources()
 				return nil, fmt.Errorf("create browser reader: %w", err)
 			}
 		}
 		htmlExtractor, err := extractor.NewHTMLExtractor()
 		if err != nil {
-			closeBrowsers()
+			closeResources()
 			return nil, fmt.Errorf("create HTML extractor: %w", err)
 		}
 		extractors, err := extractor.NewRegistry(htmlExtractor, extractor.PlainTextExtractor{})
 		if err != nil {
-			closeBrowsers()
+			closeResources()
 			return nil, fmt.Errorf("create read extractor registry: %w", err)
 		}
 		converters, err := converter.NewRegistry(converter.MarkdownConverter{}, converter.TextConverter{})
 		if err != nil {
-			closeBrowsers()
+			closeResources()
 			return nil, fmt.Errorf("create read converter registry: %w", err)
 		}
 		readMemoryCache, err := readcache.NewMemory(config.ReadCacheMaxItems, config.ReadFreshTTL, config.ReadStaleTTL, time.Now)
 		if err != nil {
-			closeBrowsers()
+			closeResources()
 			return nil, fmt.Errorf("create read cache: %w", err)
 		}
 		readService, err = app.NewReadService(app.ReadServiceConfig{
@@ -273,17 +128,17 @@ func New(config config.Config) (*App, error) {
 			Cache: readMemoryCache, OperationTimeout: config.TotalTimeout, Now: time.Now,
 		})
 		if err != nil {
-			closeBrowsers()
+			closeResources()
 			return nil, fmt.Errorf("create read service: %w", err)
 		}
 		readScheduler, schedulerErr := app.NewReadScheduler(readService, 8)
 		if schedulerErr != nil {
-			closeBrowsers()
+			closeResources()
 			return nil, fmt.Errorf("create read scheduler: %w", schedulerErr)
 		}
 		contentSearchService, err = app.NewSearchContentService(qualitySelector, readScheduler, qualityEvaluator, time.Now)
 		if err != nil {
-			closeBrowsers()
+			closeResources()
 			return nil, fmt.Errorf("create search content service: %w", err)
 		}
 	}
@@ -291,18 +146,16 @@ func New(config config.Config) (*App, error) {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	router, err := httpapi.NewRouter(searchService, httpapi.Options{
+		Ready:  searchRuntime.Ready,
 		Reader: readService, ContentSearcher: contentSearchService,
 		Debug: config.Debug, DebugToken: config.DebugToken, TotalTimeout: config.TotalTimeout, ContentTimeout: config.ContentTimeout, ClientRate: config.ClientRate,
 		ClientBurst: config.ClientBurst, TrustedProxies: config.TrustedProxies,
 	})
 	if err != nil {
-		closeBrowsers()
+		closeResources()
 		return nil, err
 	}
-	return &App{Router: router, close: func() {
-		closeBrowsers()
-		baseTransport.CloseIdleConnections()
-	}}, nil
+	return &App{Router: router, close: closeResources}, nil
 }
 
 // Close releases browser processes and idle HTTP connections.
