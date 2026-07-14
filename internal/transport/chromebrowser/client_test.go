@@ -1,6 +1,7 @@
 package chromebrowser
 
 import (
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -9,34 +10,52 @@ import (
 )
 
 func TestNewRejectsMissingProfileDir(t *testing.T) {
-	if _, err := New(Config{Timeout: 10 * time.Second}); err == nil || !strings.Contains(err.Error(), "profile") {
+	if _, err := New(Config{Timeout: 10 * time.Second}, testURLBuilder); err == nil || !strings.Contains(err.Error(), "profile") {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestClientUsesInjectedURLBuilder(t *testing.T) {
+	builder := func(request domain.SearchRequest) (string, error) {
+		return "https://www.bing.com/search?q=" + url.QueryEscape(request.Query), nil
+	}
+	client, err := New(Config{
+		ProfileDir: t.TempDir(),
+		Timeout:    10 * time.Second,
+		Headless:   true,
+	}, builder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	got, err := client.buildURL(domain.SearchRequest{Query: "go language", Limit: 10, Page: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "https://www.bing.com/search?q=go+language" {
+		t.Fatalf("url=%s", got)
 	}
 }
 
 func TestNewCreatesReusableClientWithoutLaunchingChrome(t *testing.T) {
 	client, err := New(Config{
 		ProfileDir: t.TempDir(),
-		BaseURL:    "https://www.baidu.com/s",
 		Timeout:    10 * time.Second,
 		Headless:   true,
-	})
+	}, testURLBuilder)
 	if err != nil {
 		t.Fatal(err)
 	}
 	client.Close()
 }
 
-func TestBuildSearchURL(t *testing.T) {
-	got, err := buildSearchURL("https://www.baidu.com/s", domain.SearchRequest{
-		Query: "中文 golang",
-		Limit: 10,
-		Page:  2,
-	})
-	if err != nil {
-		t.Fatal(err)
+func TestNewRejectsMissingURLBuilder(t *testing.T) {
+	_, err := New(Config{ProfileDir: t.TempDir(), Timeout: 10 * time.Second}, nil)
+	if err == nil || !strings.Contains(err.Error(), "builder") {
+		t.Fatalf("err=%v", err)
 	}
-	if !strings.Contains(got, "wd=%E4%B8%AD%E6%96%87+golang") || !strings.Contains(got, "pn=10") || !strings.Contains(got, "rn=10") {
-		t.Fatal(got)
-	}
+}
+
+func testURLBuilder(_ domain.SearchRequest) (string, error) {
+	return "https://example.com/search", nil
 }

@@ -15,6 +15,7 @@ import (
 	"web-search-backend/internal/cache"
 	"web-search-backend/internal/config"
 	"web-search-backend/internal/debugartifact"
+	"web-search-backend/internal/domain"
 	"web-search-backend/internal/provider"
 	"web-search-backend/internal/provider/baidu"
 	"web-search-backend/internal/resilience"
@@ -58,9 +59,11 @@ func New(config config.Config) (*App, error) {
 		return nil, fmt.Errorf("create mobile transport: %w", err)
 	}
 	chromeClient, err := chromebrowser.New(chromebrowser.Config{
-		ProfileDir: config.ChromeProfileDir, BaseURL: config.DesktopURL, ExecPath: config.ChromePath,
+		ProfileDir: config.ChromeProfileDir, ExecPath: config.ChromePath,
 		Timeout: config.ChromeTimeout, Headless: config.ChromeHeadless, DisableSandbox: config.ChromeNoSandbox,
 		MaxBodyBytes: int(config.MaxBodyBytes),
+	}, func(request domain.SearchRequest) (string, error) {
+		return baidu.BuildSearchURL(config.DesktopURL, request)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create chromedp transport: %w", err)

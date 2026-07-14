@@ -3,9 +3,7 @@ package chromebrowser
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,11 +15,11 @@ import (
 	"web-search-backend/internal/transport"
 )
 
-const defaultBaseURL = "https://www.baidu.com/s"
+// URLBuilder builds an engine-specific search URL.
+type URLBuilder func(domain.SearchRequest) (string, error)
 
 type Config struct {
 	ProfileDir     string
-	BaseURL        string
 	ExecPath       string
 	Timeout        time.Duration
 	Headless       bool
@@ -31,6 +29,7 @@ type Config struct {
 
 type Client struct {
 	config        Config
+	urlBuilder    URLBuilder
 	allocatorCtx  context.Context
 	allocatorStop context.CancelFunc
 	browserCtx    context.Context
@@ -39,7 +38,7 @@ type Client struct {
 	closeOnce     sync.Once
 }
 
-func New(config Config) (*Client, error) {
+func New(config Config, urlBuilder URLBuilder) (*Client, error) {
 	config.ProfileDir = strings.TrimSpace(config.ProfileDir)
 	if config.ProfileDir == "" {
 		return nil, fmt.Errorf("chrome profile directory is empty")
@@ -47,10 +46,10 @@ func New(config Config) (*Client, error) {
 	if config.Timeout <= 0 {
 		return nil, fmt.Errorf("chrome timeout must be positive")
 	}
-	if config.BaseURL == "" {
-		config.BaseURL = defaultBaseURL
+	if urlBuilder == nil {
+		return nil, fmt.Errorf("chrome URL builder is nil")
 	}
-	if _, err := buildSearchURL(config.BaseURL, domain.SearchRequest{Query: "validation", Limit: 10, Page: 1}); err != nil {
+	if _, err := urlBuilder(domain.SearchRequest{Query: "validation", Limit: 10, Page: 1}); err != nil {
 		return nil, err
 	}
 	if config.MaxBodyBytes <= 0 {
@@ -76,6 +75,7 @@ func New(config Config) (*Client, error) {
 	browserCtx, browserStop := chromedp.NewContext(allocatorCtx)
 	return &Client{
 		config:        config,
+		urlBuilder:    urlBuilder,
 		allocatorCtx:  allocatorCtx,
 		allocatorStop: allocatorStop,
 		browserCtx:    browserCtx,
@@ -89,7 +89,7 @@ func (c *Client) Name() domain.TransportName {
 }
 
 func (c *Client) Fetch(ctx context.Context, request domain.SearchRequest) (transport.Response, error) {
-	requestURL, err := buildSearchURL(c.config.BaseURL, request)
+	requestURL, err := c.buildURL(request)
 	if err != nil {
 		return transport.Response{}, err
 	}
@@ -165,16 +165,6 @@ func (c *Client) Close() {
 	})
 }
 
-func buildSearchURL(baseURL string, request domain.SearchRequest) (string, error) {
-	u, err := url.Parse(baseURL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return "", fmt.Errorf("invalid chrome base URL %q", baseURL)
-	}
-	values := u.Query()
-	values.Set("wd", request.Query)
-	values.Set("rn", strconv.Itoa(request.Limit))
-	values.Set("pn", strconv.Itoa((request.Page-1)*request.Limit))
-	values.Set("ie", "utf-8")
-	u.RawQuery = values.Encode()
-	return u.String(), nil
+func (c *Client) buildURL(request domain.SearchRequest) (string, error) {
+	return c.urlBuilder(request)
 }
