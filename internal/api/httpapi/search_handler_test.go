@@ -128,11 +128,23 @@ func TestSearchBindsDefaultsAndReturnsSuccess(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
-	if searcher.request.Provider != "baidu" || searcher.request.Limit != 10 || searcher.request.Page != 1 || searcher.request.RequestID != "req_client_1" {
+	if searcher.request.Provider != domain.ProviderNameAuto || searcher.request.Limit != 10 || searcher.request.Page != 1 || searcher.request.RequestID != "req_client_1" {
 		t.Fatalf("request=%#v", searcher.request)
 	}
 	if w.Header().Get("X-Request-ID") != "req_client_1" {
 		t.Fatalf("response request ID=%q", w.Header().Get("X-Request-ID"))
+	}
+}
+
+func TestSearchErrorReturnsRequestedProvider(t *testing.T) {
+	upstream := &domain.SearchError{
+		Code: domain.ErrProviderUnavailable, Message: "unavailable", Retryable: true, Original: errors.New("upstream failed"),
+	}
+	router := testRouter(t, &fakeSearcher{err: upstream}, false)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/search?q=golang&provider=duckduckgo", nil))
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), `"provider":"duckduckgo"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 

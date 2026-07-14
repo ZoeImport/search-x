@@ -3,21 +3,33 @@ package detector
 import (
 	"net/url"
 	"strings"
+
+	"web-search-backend/internal/domain"
 )
 
-type Classification string
+// Classification is the typed outcome of an upstream search attempt.
+type Classification = domain.Classification
 
 const (
-	Normal       Classification = "normal"
-	Empty        Classification = "empty"
-	Captcha      Classification = "captcha"
-	RateLimited  Classification = "rate_limited"
-	Blocked      Classification = "blocked"
-	ParseChanged Classification = "parse_changed"
-	Timeout      Classification = "timeout"
-	NetworkError Classification = "network_error"
+	// Normal indicates a normal result page.
+	Normal Classification = domain.ClassificationNormal
+	// Empty indicates a valid page without results.
+	Empty Classification = domain.ClassificationEmpty
+	// Captcha indicates a security verification page.
+	Captcha Classification = domain.ClassificationCaptcha
+	// RateLimited indicates an upstream rate limit.
+	RateLimited Classification = domain.ClassificationRateLimited
+	// Blocked indicates an upstream access block.
+	Blocked Classification = domain.ClassificationBlocked
+	// ParseChanged indicates unexpected upstream markup.
+	ParseChanged Classification = domain.ClassificationParseChanged
+	// Timeout indicates a context or upstream timeout.
+	Timeout Classification = domain.ClassificationTimeout
+	// NetworkError indicates a transport-level network error.
+	NetworkError Classification = domain.ClassificationNetworkError
 )
 
+// Classify identifies the outcome represented by a Baidu HTTP response.
 func Classify(status int, finalURL string, body []byte) Classification {
 	if status == 429 {
 		return RateLimited

@@ -36,6 +36,44 @@ const (
 	TransportNameStaleCache TransportName = "stale_cache"
 )
 
+// Classification identifies the outcome of one upstream search attempt.
+type Classification string
+
+const (
+	// ClassificationNormal indicates a normal result page.
+	ClassificationNormal Classification = "normal"
+	// ClassificationEmpty indicates a valid page without results.
+	ClassificationEmpty Classification = "empty"
+	// ClassificationCaptcha indicates a security verification page.
+	ClassificationCaptcha Classification = "captcha"
+	// ClassificationRateLimited indicates an upstream rate limit.
+	ClassificationRateLimited Classification = "rate_limited"
+	// ClassificationBlocked indicates an upstream access block.
+	ClassificationBlocked Classification = "blocked"
+	// ClassificationParseChanged indicates unexpected upstream markup.
+	ClassificationParseChanged Classification = "parse_changed"
+	// ClassificationTimeout indicates a context or upstream timeout.
+	ClassificationTimeout Classification = "timeout"
+	// ClassificationNetworkError indicates a transport-level network error.
+	ClassificationNetworkError Classification = "network_error"
+)
+
+// WarningCode identifies a stable non-fatal search warning.
+type WarningCode string
+
+const (
+	// WarningCodeArtifactSaveError indicates a debug artifact persistence failure.
+	WarningCodeArtifactSaveError WarningCode = "artifact_save_error"
+	// WarningCodeCacheWriteError indicates a successful response could not be cached.
+	WarningCodeCacheWriteError WarningCode = "cache_write_error"
+	// WarningCodeLiveSearchUnavailable indicates stale cache was returned after a live failure.
+	WarningCodeLiveSearchUnavailable WarningCode = "live_search_unavailable"
+	// WarningCodeProviderFallback indicates a later provider produced the response.
+	WarningCodeProviderFallback WarningCode = "provider_fallback"
+	// WarningCodeRedirectURLUnresolved indicates a search-engine redirect URL was preserved.
+	WarningCodeRedirectURLUnresolved WarningCode = "redirect_url_unresolved"
+)
+
 type SearchRequest struct {
 	Query     string
 	Provider  ProviderName
@@ -54,18 +92,19 @@ type SearchResult struct {
 }
 
 type Warning struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code    WarningCode `json:"code"`
+	Message string      `json:"message"`
 }
 
 type Attempt struct {
+	// Provider identifies the provider that made this upstream attempt.
 	Provider        ProviderName        `json:"provider,omitempty"`
 	Transport       TransportName       `json:"transport"`
 	RequestURL      string              `json:"request_url,omitempty"`
 	HTTPStatus      int                 `json:"http_status,omitempty"`
 	FinalURL        string              `json:"final_url,omitempty"`
 	ElapsedMS       int64               `json:"elapsed_ms"`
-	Classification  string              `json:"classification"`
+	Classification  Classification      `json:"classification"`
 	ParserError     string              `json:"parser_error,omitempty"`
 	OriginalError   string              `json:"original_error,omitempty"`
 	ResponseHeaders map[string][]string `json:"response_headers,omitempty"`
@@ -74,15 +113,17 @@ type Attempt struct {
 }
 
 type Meta struct {
-	RequestedProvider     ProviderName  `json:"requested_provider,omitempty"`
-	Transport             TransportName `json:"transport"`
-	Cached                bool          `json:"cached"`
-	Degraded              bool          `json:"degraded"`
-	FallbackCount         int           `json:"fallback_count"`
-	ProviderFallbackCount int           `json:"provider_fallback_count"`
-	TookMS                int64         `json:"took_ms"`
-	RequestID             string        `json:"request_id"`
-	CacheAgeSeconds       int64         `json:"cache_age_seconds,omitempty"`
+	// RequestedProvider preserves the provider selected by the caller.
+	RequestedProvider ProviderName  `json:"requested_provider,omitempty"`
+	Transport         TransportName `json:"transport"`
+	Cached            bool          `json:"cached"`
+	Degraded          bool          `json:"degraded"`
+	FallbackCount     int           `json:"fallback_count"`
+	// ProviderFallbackCount records cross-provider fallback transitions.
+	ProviderFallbackCount int    `json:"provider_fallback_count"`
+	TookMS                int64  `json:"took_ms"`
+	RequestID             string `json:"request_id"`
+	CacheAgeSeconds       int64  `json:"cache_age_seconds,omitempty"`
 }
 
 type Debug struct {

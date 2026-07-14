@@ -50,7 +50,7 @@ func (s *SearchService) Search(ctx context.Context, request domain.SearchRequest
 	key := cacheKey(normalized)
 	if !normalized.Refresh {
 		if cached, ok := s.cache.GetFresh(ctx, key); ok {
-			return s.prepareFresh(cached, normalized.RequestID, started), nil
+			return s.prepareFresh(cached, normalized.Provider, normalized.RequestID, started), nil
 		}
 	}
 
@@ -66,6 +66,9 @@ func (s *SearchService) Search(ctx context.Context, request domain.SearchRequest
 		}
 		response, providerErr := selected.Search(ctx, normalized)
 		if providerErr == nil {
+			if response.Meta.RequestedProvider == "" {
+				response.Meta.RequestedProvider = normalized.Provider
+			}
 			if response.Results == nil {
 				response.Results = make([]domain.SearchResult, 0)
 			}
@@ -75,12 +78,12 @@ func (s *SearchService) Search(ctx context.Context, request domain.SearchRequest
 			cacheValue := response
 			cacheValue.Debug = nil
 			if cacheErr := s.cache.Set(ctx, key, cacheValue); cacheErr != nil {
-				response.Warnings = append(response.Warnings, domain.Warning{Code: "cache_write_error", Message: cacheErr.Error()})
+				response.Warnings = append(response.Warnings, domain.Warning{Code: domain.WarningCodeCacheWriteError, Message: cacheErr.Error()})
 			}
 			return response, nil
 		}
 		if stale, ok := s.cache.GetStale(ctx, key); ok {
-			return s.prepareStale(stale, normalized.RequestID, providerErr, normalized.Debug), nil
+			return s.prepareStale(stale, normalized.Provider, normalized.RequestID, providerErr, normalized.Debug), nil
 		}
 		return domain.SearchResponse{}, providerErr
 	})
@@ -106,8 +109,9 @@ func (s *SearchService) Search(ctx context.Context, request domain.SearchRequest
 	}
 }
 
-func (s *SearchService) prepareFresh(response domain.SearchResponse, requestID string, started time.Time) domain.SearchResponse {
+func (s *SearchService) prepareFresh(response domain.SearchResponse, requestedProvider domain.ProviderName, requestID string, started time.Time) domain.SearchResponse {
 	response.Meta.Transport = "fresh_cache"
+	response.Meta.RequestedProvider = requestedProvider
 	response.Meta.Cached = true
 	response.Meta.Degraded = false
 	response.Meta.RequestID = requestID
@@ -121,8 +125,9 @@ func (s *SearchService) prepareFresh(response domain.SearchResponse, requestID s
 	return response
 }
 
-func (s *SearchService) prepareStale(response domain.SearchResponse, requestID string, providerErr error, debug bool) domain.SearchResponse {
+func (s *SearchService) prepareStale(response domain.SearchResponse, requestedProvider domain.ProviderName, requestID string, providerErr error, debug bool) domain.SearchResponse {
 	response.Meta.Transport = "stale_cache"
+	response.Meta.RequestedProvider = requestedProvider
 	response.Meta.Cached = true
 	response.Meta.Degraded = true
 	response.Meta.RequestID = requestID
@@ -130,8 +135,8 @@ func (s *SearchService) prepareStale(response domain.SearchResponse, requestID s
 		response.Meta.CacheAgeSeconds = int64(s.now().Sub(response.StoredAt).Seconds())
 	}
 	response.Warnings = append(response.Warnings, domain.Warning{
-		Code:    "live_search_unavailable",
-		Message: fmt.Sprintf("实时百度查询不可用，当前返回旧缓存: %v", providerErr),
+		Code:    domain.WarningCodeLiveSearchUnavailable,
+		Message: fmt.Sprintf("实时 Provider 查询不可用，当前返回旧缓存: %v", providerErr),
 	})
 	var searchErr *domain.SearchError
 	if errors.As(providerErr, &searchErr) {
@@ -161,7 +166,7 @@ func normalizeRequest(request domain.SearchRequest) (domain.SearchRequest, error
 	}
 	request.Provider = domain.ProviderName(strings.ToLower(strings.TrimSpace(string(request.Provider))))
 	if request.Provider == "" {
-		request.Provider = domain.ProviderNameBaidu
+		request.Provider = domain.ProviderNameAuto
 	}
 	if request.Limit == 0 {
 		request.Limit = 10

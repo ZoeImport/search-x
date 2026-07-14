@@ -34,6 +34,12 @@ func (f fakeTransport) Fetch(context.Context, domain.SearchRequest) (transport.R
 	return f.response, f.err
 }
 
+func TestNewRejectsNilTransport(t *testing.T) {
+	if _, err := New(nil); err == nil {
+		t.Fatal("expected nil transport error")
+	}
+}
+
 func TestBuildSearchURL(t *testing.T) {
 	got, err := BuildSearchURL("https://www.bing.com/search", domain.SearchRequest{
 		Query: "go language", Limit: 10, Page: 2,
@@ -47,10 +53,13 @@ func TestBuildSearchURL(t *testing.T) {
 }
 
 func TestProviderReturnsParsedResults(t *testing.T) {
-	provider := New(fakeTransport{response: transport.Response{
+	provider, err := New(fakeTransport{response: transport.Response{
 		RequestURL: "https://www.bing.com/search?q=go", FinalURL: "https://www.bing.com/search?q=go",
 		StatusCode: 200, Body: fixture(t, "normal.html"),
 	}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	got, err := provider.Search(context.Background(), domain.SearchRequest{
 		Query: "go", Provider: domain.ProviderNameBing, Limit: 10, Page: 1, Debug: true,
 	})
@@ -66,10 +75,13 @@ func TestProviderReturnsParsedResults(t *testing.T) {
 }
 
 func TestProviderClassifiesCaptcha(t *testing.T) {
-	provider := New(fakeTransport{response: transport.Response{
+	provider, err := New(fakeTransport{response: transport.Response{
 		RequestURL: "https://www.bing.com/search?q=go", FinalURL: "https://www.bing.com/challenge",
 		StatusCode: 200, Body: fixture(t, "captcha.html"),
 	}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, gotErr := provider.Search(context.Background(), domain.SearchRequest{Query: "go", Limit: 10, Page: 1})
 	var searchErr *domain.SearchError
 	if !errors.As(gotErr, &searchErr) || searchErr.Code != domain.ErrCaptchaRequired {
@@ -79,7 +91,10 @@ func TestProviderClassifiesCaptcha(t *testing.T) {
 
 func TestProviderPreservesTransportError(t *testing.T) {
 	original := errors.New("chrome stopped")
-	provider := New(fakeTransport{err: original})
+	provider, err := New(fakeTransport{err: original})
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, gotErr := provider.Search(context.Background(), domain.SearchRequest{Query: "go", Limit: 10, Page: 1})
 	var searchErr *domain.SearchError
 	if !errors.As(gotErr, &searchErr) || searchErr.Code != domain.ErrProviderUnavailable || !strings.Contains(searchErr.Error(), original.Error()) {
@@ -88,10 +103,13 @@ func TestProviderPreservesTransportError(t *testing.T) {
 }
 
 func TestProviderWarnsWhenDebugArtifactSaveFails(t *testing.T) {
-	provider := New(fakeTransport{response: transport.Response{
+	provider, err := New(fakeTransport{response: transport.Response{
 		RequestURL: "https://www.bing.com/search?q=go", FinalURL: "https://www.bing.com/search?q=go",
 		StatusCode: 200, Body: fixture(t, "normal.html"), Screenshot: []byte("png"),
 	}}, failingArtifacts{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	got, err := provider.Search(context.Background(), domain.SearchRequest{
 		Query: "go", Provider: domain.ProviderNameBing, Limit: 10, Page: 1, Debug: true,
 	})

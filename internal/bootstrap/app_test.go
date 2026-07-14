@@ -14,22 +14,32 @@ import (
 )
 
 func TestNewBuildsEndToEndOfflineSearchApp(t *testing.T) {
-	fixture, err := os.ReadFile("../../testdata/baidu/desktop_normal.html")
+	baiduFixture, err := os.ReadFile("../../testdata/baidu/desktop_normal.html")
 	if err != nil {
 		t.Fatal(err)
 	}
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	duckFixture, err := os.ReadFile("../../testdata/duckduckgo/normal.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write(fixture)
+		if request.URL.Query().Get("q") != "" {
+			_, _ = w.Write(duckFixture)
+			return
+		}
+		_, _ = w.Write(baiduFixture)
 	}))
 	defer upstream.Close()
 
 	temp := t.TempDir()
 	cfg := config.Config{
 		Debug: true, DebugDir: filepath.Join(temp, "debug"), DebugPreviewBytes: 32 * 1024,
-		ChromeProfileDir: filepath.Join(temp, "profile"), ChromeHeadless: true,
+		ChromeProfileDir: filepath.Join(temp, "profile"), BingProfileDir: filepath.Join(temp, "bing-profile"), ChromeHeadless: true,
 		DesktopURL: upstream.URL, MobileURL: upstream.URL, UserAgent: "test-agent",
+		DuckDuckGoURL: upstream.URL, BingURL: "https://www.bing.com/search",
 		TotalTimeout: 2 * time.Second, DesktopTimeout: time.Second, MobileTimeout: time.Second, ChromeTimeout: time.Second,
+		DuckDuckGoTimeout: time.Second, BingTimeout: time.Second,
 		FreshTTL: time.Minute, StaleTTL: time.Hour, ProviderRate: 1000, ProviderBurst: 100,
 		ClientRate: 1000, ClientBurst: 100, CacheMaxItems: 10, MaxBodyBytes: 1 << 20,
 	}
@@ -49,6 +59,21 @@ func TestNewBuildsEndToEndOfflineSearchApp(t *testing.T) {
 		t.Fatal(err)
 	}
 	if response.Provider != "baidu" || response.Meta.Transport != "desktop_http" || len(response.Results) != 2 {
+		t.Fatalf("response=%#v", response)
+	}
+	if response.Meta.RequestedProvider != domain.ProviderNameAuto {
+		t.Fatalf("requested_provider=%s", response.Meta.RequestedProvider)
+	}
+
+	w = httptest.NewRecorder()
+	app.Router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/search?q=golang&provider=duckduckgo", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Provider != domain.ProviderNameDuckDuckGo || response.Meta.RequestedProvider != domain.ProviderNameDuckDuckGo {
 		t.Fatalf("response=%#v", response)
 	}
 

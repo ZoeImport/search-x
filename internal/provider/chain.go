@@ -108,7 +108,7 @@ func (c *Chain) prepareSuccess(
 		response.Meta.Degraded = true
 		for _, failedProvider := range failedProviders {
 			response.Warnings = append(response.Warnings, domain.Warning{
-				Code:    "provider_fallback",
+				Code:    domain.WarningCodeProviderFallback,
 				Message: fmt.Sprintf("provider %s failed; using %s", failedProvider, member.Name()),
 			})
 		}

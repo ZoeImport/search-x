@@ -79,7 +79,7 @@ func parse(body []byte, limit int, rootSelector, itemSelector string, directChil
 		})
 		if unresolved {
 			warnings = append(warnings, domain.Warning{
-				Code:    "redirect_url_unresolved",
+				Code:    domain.WarningCodeRedirectURLUnresolved,
 				Message: fmt.Sprintf("result rank %d uses a Baidu redirect URL", len(results)),
 			})
 		}

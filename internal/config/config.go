@@ -15,27 +15,37 @@ type Config struct {
 	DebugDir          string
 	DebugPreviewBytes int
 	ChromeProfileDir  string
-	ChromePath        string
-	ChromeHeadless    bool
-	ChromeNoSandbox   bool
-	DesktopURL        string
-	MobileURL         string
-	UserAgent         string
-	TotalTimeout      time.Duration
-	DesktopTimeout    time.Duration
-	MobileTimeout     time.Duration
-	ChromeTimeout     time.Duration
-	FreshTTL          time.Duration
-	StaleTTL          time.Duration
-	ProviderRate      float64
-	ProviderBurst     int
-	JitterMin         time.Duration
-	JitterMax         time.Duration
-	ClientRate        float64
-	ClientBurst       int
-	CacheMaxItems     int
-	MaxBodyBytes      int64
-	TrustedProxies    []string
+	// BingProfileDir stores Bing's isolated browser profile.
+	BingProfileDir  string
+	ChromePath      string
+	ChromeHeadless  bool
+	ChromeNoSandbox bool
+	DesktopURL      string
+	MobileURL       string
+	// DuckDuckGoURL is the DuckDuckGo HTML search endpoint.
+	DuckDuckGoURL string
+	// BingURL is the Bing search endpoint used by the browser transport.
+	BingURL        string
+	UserAgent      string
+	TotalTimeout   time.Duration
+	DesktopTimeout time.Duration
+	MobileTimeout  time.Duration
+	ChromeTimeout  time.Duration
+	// DuckDuckGoTimeout limits one DuckDuckGo HTTP request.
+	DuckDuckGoTimeout time.Duration
+	// BingTimeout limits one Bing browser request.
+	BingTimeout    time.Duration
+	FreshTTL       time.Duration
+	StaleTTL       time.Duration
+	ProviderRate   float64
+	ProviderBurst  int
+	JitterMin      time.Duration
+	JitterMax      time.Duration
+	ClientRate     float64
+	ClientBurst    int
+	CacheMaxItems  int
+	MaxBodyBytes   int64
+	TrustedProxies []string
 }
 
 func Load() (Config, error) {
@@ -45,14 +55,19 @@ func Load() (Config, error) {
 		DebugDir:          "./var/debug",
 		DebugPreviewBytes: 32 * 1024,
 		ChromeProfileDir:  "./var/chrome-profile",
+		BingProfileDir:    "./var/chrome-profile-bing",
 		ChromeHeadless:    true,
 		DesktopURL:        "https://www.baidu.com/s",
 		MobileURL:         "https://m.baidu.com/s",
+		DuckDuckGoURL:     "https://html.duckduckgo.com/html/",
+		BingURL:           "https://www.bing.com/search",
 		UserAgent:         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0 Safari/537.36",
 		TotalTimeout:      20 * time.Second,
 		DesktopTimeout:    4 * time.Second,
 		MobileTimeout:     4 * time.Second,
 		ChromeTimeout:     10 * time.Second,
+		DuckDuckGoTimeout: 5 * time.Second,
+		BingTimeout:       10 * time.Second,
 		FreshTTL:          15 * time.Minute,
 		StaleTTL:          24 * time.Hour,
 		ProviderRate:      1,
@@ -73,9 +88,12 @@ func Load() (Config, error) {
 		{"SEARCH_DEBUG_TOKEN", &config.DebugToken},
 		{"SEARCH_DEBUG_DIR", &config.DebugDir},
 		{"SEARCH_CHROME_PROFILE_DIR", &config.ChromeProfileDir},
+		{"SEARCH_BING_PROFILE_DIR", &config.BingProfileDir},
 		{"SEARCH_CHROME_PATH", &config.ChromePath},
 		{"SEARCH_DESKTOP_URL", &config.DesktopURL},
 		{"SEARCH_MOBILE_URL", &config.MobileURL},
+		{"SEARCH_DUCKDUCKGO_URL", &config.DuckDuckGoURL},
+		{"SEARCH_BING_URL", &config.BingURL},
 		{"SEARCH_USER_AGENT", &config.UserAgent},
 	}
 	for _, item := range stringValues {
@@ -105,6 +123,8 @@ func Load() (Config, error) {
 		{"SEARCH_DESKTOP_TIMEOUT", &config.DesktopTimeout},
 		{"SEARCH_MOBILE_TIMEOUT", &config.MobileTimeout},
 		{"SEARCH_CHROME_TIMEOUT", &config.ChromeTimeout},
+		{"SEARCH_DUCKDUCKGO_TIMEOUT", &config.DuckDuckGoTimeout},
+		{"SEARCH_BING_TIMEOUT", &config.BingTimeout},
 		{"SEARCH_FRESH_TTL", &config.FreshTTL},
 		{"SEARCH_STALE_TTL", &config.StaleTTL},
 		{"SEARCH_JITTER_MIN", &config.JitterMin},
@@ -155,8 +175,8 @@ func Load() (Config, error) {
 		}
 	}
 
-	if config.Address == "" || config.DebugDir == "" || config.ChromeProfileDir == "" {
-		return Config{}, fmt.Errorf("SEARCH_ADDR, SEARCH_DEBUG_DIR and SEARCH_CHROME_PROFILE_DIR must not be empty")
+	if config.Address == "" || config.DebugDir == "" || config.ChromeProfileDir == "" || config.BingProfileDir == "" {
+		return Config{}, fmt.Errorf("SEARCH_ADDR, SEARCH_DEBUG_DIR, SEARCH_CHROME_PROFILE_DIR and SEARCH_BING_PROFILE_DIR must not be empty")
 	}
 	if config.StaleTTL <= config.FreshTTL {
 		return Config{}, fmt.Errorf("SEARCH_STALE_TTL must be greater than SEARCH_FRESH_TTL")
@@ -223,8 +243,8 @@ func knownEnvironmentVariables() []string {
 	return []string{
 		"SEARCH_ADDR", "SEARCH_DEBUG", "SEARCH_DEBUG_TOKEN", "SEARCH_DEBUG_DIR", "SEARCH_DEBUG_PREVIEW_BYTES",
 		"SEARCH_CHROME_PROFILE_DIR", "SEARCH_CHROME_PATH", "SEARCH_CHROME_HEADLESS", "SEARCH_CHROME_NO_SANDBOX",
-		"SEARCH_DESKTOP_URL", "SEARCH_MOBILE_URL", "SEARCH_USER_AGENT",
-		"SEARCH_TOTAL_TIMEOUT", "SEARCH_DESKTOP_TIMEOUT", "SEARCH_MOBILE_TIMEOUT", "SEARCH_CHROME_TIMEOUT",
+		"SEARCH_BING_PROFILE_DIR", "SEARCH_DESKTOP_URL", "SEARCH_MOBILE_URL", "SEARCH_DUCKDUCKGO_URL", "SEARCH_BING_URL", "SEARCH_USER_AGENT",
+		"SEARCH_TOTAL_TIMEOUT", "SEARCH_DESKTOP_TIMEOUT", "SEARCH_MOBILE_TIMEOUT", "SEARCH_CHROME_TIMEOUT", "SEARCH_DUCKDUCKGO_TIMEOUT", "SEARCH_BING_TIMEOUT",
 		"SEARCH_FRESH_TTL", "SEARCH_STALE_TTL", "SEARCH_PROVIDER_RATE", "SEARCH_PROVIDER_BURST",
 		"SEARCH_JITTER_MIN", "SEARCH_JITTER_MAX",
 		"SEARCH_CLIENT_RATE", "SEARCH_CLIENT_BURST", "SEARCH_CACHE_MAX_ITEMS", "SEARCH_MAX_BODY_BYTES",

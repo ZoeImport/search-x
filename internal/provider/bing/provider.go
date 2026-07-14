@@ -16,7 +16,9 @@ import (
 
 // ArtifactStore persists authorized Bing debug artifacts.
 type ArtifactStore interface {
+	// SaveHTML persists an HTML response artifact and returns its path.
 	SaveHTML(requestID, transportName string, body []byte) (string, error)
+	// SaveScreenshot persists a screenshot artifact and returns its path.
 	SaveScreenshot(requestID, transportName string, body []byte) (string, error)
 }
 
@@ -26,13 +28,16 @@ type Provider struct {
 	artifacts ArtifactStore
 }
 
-// New creates a Bing provider using the supplied browser transport.
-func New(browser transport.SearchTransport, artifacts ...ArtifactStore) *Provider {
+// New validates dependencies and creates a Bing provider.
+func New(browser transport.SearchTransport, artifacts ...ArtifactStore) (*Provider, error) {
+	if browser == nil {
+		return nil, fmt.Errorf("Bing browser transport is nil")
+	}
 	var artifactStore ArtifactStore
 	if len(artifacts) > 0 {
 		artifactStore = artifacts[0]
 	}
-	return &Provider{browser: browser, artifacts: artifactStore}
+	return &Provider{browser: browser, artifacts: artifactStore}, nil
 }
 
 // Name returns the Bing provider name.
@@ -58,28 +63,28 @@ func (p *Provider) Search(ctx context.Context, request domain.SearchRequest) (do
 		return domain.SearchResponse{}, newSearchError(code, fetchErr, attempt, artifactPaths)
 	}
 	if isCaptcha(response.FinalURL, response.Body) {
-		attempt.Classification = string(detector.Captcha)
+		attempt.Classification = detector.Captcha
 		attempt.OriginalError = fmt.Sprintf("Bing response classified as captcha: status=%d final_url=%s", response.StatusCode, response.FinalURL)
 		return domain.SearchResponse{}, newSearchError(domain.ErrCaptchaRequired, errors.New(attempt.OriginalError), attempt, artifactPaths)
 	}
 	if response.StatusCode == http.StatusTooManyRequests {
-		attempt.Classification = string(detector.RateLimited)
+		attempt.Classification = detector.RateLimited
 		attempt.OriginalError = fmt.Sprintf("Bing returned HTTP %d", response.StatusCode)
 		return domain.SearchResponse{}, newSearchError(domain.ErrRateLimited, errors.New(attempt.OriginalError), attempt, artifactPaths)
 	}
 	if response.StatusCode >= http.StatusBadRequest {
-		attempt.Classification = string(detector.Blocked)
+		attempt.Classification = detector.Blocked
 		attempt.OriginalError = fmt.Sprintf("Bing returned HTTP %d", response.StatusCode)
 		return domain.SearchResponse{}, newSearchError(domain.ErrProviderUnavailable, errors.New(attempt.OriginalError), attempt, artifactPaths)
 	}
 	results, err := Parse(response.Body, request.Limit)
 	if err != nil {
-		attempt.Classification = string(detector.ParseChanged)
+		attempt.Classification = detector.ParseChanged
 		attempt.ParserError = err.Error()
 		attempt.OriginalError = err.Error()
 		return domain.SearchResponse{}, newSearchError(domain.ErrUpstreamChanged, err, attempt, artifactPaths)
 	}
-	attempt.Classification = string(detector.Normal)
+	attempt.Classification = detector.Normal
 	searchResponse := domain.SearchResponse{
 		Query: request.Query, Provider: p.Name(), Results: results,
 		Meta: domain.Meta{
@@ -103,14 +108,14 @@ func (p *Provider) saveArtifacts(request domain.SearchRequest, response transpor
 	warnings := make([]domain.Warning, 0, 2)
 	if len(response.Body) > 0 {
 		if path, err := p.artifacts.SaveHTML(request.RequestID, string(domain.TransportNameBingChromedp), response.Body); err != nil {
-			warnings = append(warnings, domain.Warning{Code: "artifact_save_error", Message: err.Error()})
+			warnings = append(warnings, domain.Warning{Code: domain.WarningCodeArtifactSaveError, Message: err.Error()})
 		} else {
 			paths = append(paths, path)
 		}
 	}
 	if len(response.Screenshot) > 0 {
 		if path, err := p.artifacts.SaveScreenshot(request.RequestID, string(domain.TransportNameBingChromedp), response.Screenshot); err != nil {
-			warnings = append(warnings, domain.Warning{Code: "artifact_save_error", Message: err.Error()})
+			warnings = append(warnings, domain.Warning{Code: domain.WarningCodeArtifactSaveError, Message: err.Error()})
 		} else {
 			paths = append(paths, path)
 		}

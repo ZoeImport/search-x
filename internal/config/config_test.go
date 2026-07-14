@@ -20,6 +20,12 @@ func TestLoadDefaults(t *testing.T) {
 	if got.ProviderRate != 1 || got.ProviderBurst != 3 || got.ClientRate != 5 || got.ClientBurst != 10 {
 		t.Fatalf("rates=%#v", got)
 	}
+	if got.DuckDuckGoURL != "https://html.duckduckgo.com/html/" || got.DuckDuckGoTimeout != 5*time.Second {
+		t.Fatalf("duckduckgo=%#v", got)
+	}
+	if got.BingURL != "https://www.bing.com/search" || got.BingTimeout != 10*time.Second || got.BingProfileDir != "./var/chrome-profile-bing" {
+		t.Fatalf("bing=%#v", got)
+	}
 }
 
 func TestLoadOverrides(t *testing.T) {

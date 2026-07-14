@@ -66,7 +66,7 @@ func (p *Provider) Search(ctx context.Context, request domain.SearchRequest) (do
 		if !p.breaker.Allow(current.Name()) {
 			attempts = append(attempts, domain.Attempt{
 				Transport:      current.Name(),
-				Classification: string(detector.Blocked),
+				Classification: detector.Blocked,
 				OriginalError:  fmt.Sprintf("transport %s circuit is open", current.Name()),
 			})
 			continue
@@ -75,7 +75,7 @@ func (p *Provider) Search(ctx context.Context, request domain.SearchRequest) (do
 			if err := p.limiter.Wait(ctx); err != nil {
 				attempts = append(attempts, domain.Attempt{
 					Transport:      current.Name(),
-					Classification: string(detector.Timeout),
+					Classification: detector.Timeout,
 					OriginalError:  fmt.Sprintf("wait for provider rate limiter: %v", err),
 				})
 				break
@@ -85,7 +85,7 @@ func (p *Provider) Search(ctx context.Context, request domain.SearchRequest) (do
 			if err := p.delay.Wait(ctx); err != nil {
 				attempts = append(attempts, domain.Attempt{
 					Transport:      current.Name(),
-					Classification: string(detector.Timeout),
+					Classification: detector.Timeout,
 					OriginalError:  fmt.Sprintf("wait for provider jitter: %v", err),
 				})
 				break
@@ -106,7 +106,7 @@ func (p *Provider) Search(ctx context.Context, request domain.SearchRequest) (do
 			if len(response.Body) > 0 {
 				path, err := p.artifacts.SaveHTML(requestID, string(current.Name()), response.Body)
 				if err != nil {
-					warnings = append(warnings, domain.Warning{Code: "artifact_save_error", Message: err.Error()})
+					warnings = append(warnings, domain.Warning{Code: domain.WarningCodeArtifactSaveError, Message: err.Error()})
 				} else {
 					artifactPaths = append(artifactPaths, path)
 				}
@@ -114,7 +114,7 @@ func (p *Provider) Search(ctx context.Context, request domain.SearchRequest) (do
 			if len(response.Screenshot) > 0 {
 				path, err := p.artifacts.SaveScreenshot(requestID, string(current.Name()), response.Screenshot)
 				if err != nil {
-					warnings = append(warnings, domain.Warning{Code: "artifact_save_error", Message: err.Error()})
+					warnings = append(warnings, domain.Warning{Code: domain.WarningCodeArtifactSaveError, Message: err.Error()})
 				} else {
 					artifactPaths = append(artifactPaths, path)
 				}
@@ -126,14 +126,14 @@ func (p *Provider) Search(ctx context.Context, request domain.SearchRequest) (do
 			if errors.Is(fetchErr, context.DeadlineExceeded) || errors.Is(fetchErr, context.Canceled) {
 				classification = detector.Timeout
 			}
-			attempt.Classification = string(classification)
+			attempt.Classification = classification
 			attempt.OriginalError = fetchErr.Error()
 			attempts = append(attempts, attempt)
 			continue
 		}
 
 		classification := detector.Classify(response.StatusCode, response.FinalURL, response.Body)
-		attempt.Classification = string(classification)
+		attempt.Classification = classification
 		if classification != detector.Normal {
 			attempt.OriginalError = fmt.Sprintf(
 				"baidu response classified as %s: status=%d final_url=%s",
@@ -148,14 +148,14 @@ func (p *Provider) Search(ctx context.Context, request domain.SearchRequest) (do
 
 		results, parserWarnings, parserErr := parseForTransport(current.Name(), response.Body, request.Limit)
 		if parserErr != nil {
-			attempt.Classification = string(detector.ParseChanged)
+			attempt.Classification = detector.ParseChanged
 			attempt.ParserError = parserErr.Error()
 			attempt.OriginalError = parserErr.Error()
 			attempts = append(attempts, attempt)
 			continue
 		}
 		if len(results) == 0 {
-			attempt.Classification = string(detector.Empty)
+			attempt.Classification = detector.Empty
 		}
 		attempts = append(attempts, attempt)
 		warnings = append(warnings, parserWarnings...)
@@ -204,14 +204,14 @@ func buildSearchError(attempts []domain.Attempt, artifacts []string) error {
 	message := "BaiduProvider is unavailable"
 	retryable := true
 	priority := []struct {
-		classification string
+		classification domain.Classification
 		code           domain.ErrorCode
 		message        string
 	}{
-		{string(detector.Captcha), domain.ErrCaptchaRequired, "百度返回安全验证页面"},
-		{string(detector.RateLimited), domain.ErrRateLimited, "百度限制了当前请求频率"},
-		{string(detector.Timeout), domain.ErrUpstreamTimeout, "百度查询链路超时"},
-		{string(detector.ParseChanged), domain.ErrUpstreamChanged, "百度页面结构发生变化"},
+		{detector.Captcha, domain.ErrCaptchaRequired, "百度返回安全验证页面"},
+		{detector.RateLimited, domain.ErrRateLimited, "百度限制了当前请求频率"},
+		{detector.Timeout, domain.ErrUpstreamTimeout, "百度查询链路超时"},
+		{detector.ParseChanged, domain.ErrUpstreamChanged, "百度页面结构发生变化"},
 	}
 	var original string
 	for _, wanted := range priority {

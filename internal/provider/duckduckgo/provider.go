@@ -19,9 +19,13 @@ const defaultMaxBodyBytes int64 = 4 << 20
 
 // Config defines DuckDuckGo HTTP search limits.
 type Config struct {
-	BaseURL      string
-	UserAgent    string
-	Timeout      time.Duration
+	// BaseURL is the DuckDuckGo HTML search endpoint.
+	BaseURL string
+	// UserAgent is sent to the upstream endpoint.
+	UserAgent string
+	// Timeout limits one upstream request.
+	Timeout time.Duration
+	// MaxBodyBytes limits the response body read into memory.
 	MaxBodyBytes int64
 }
 
@@ -118,12 +122,12 @@ func (p *Provider) Search(ctx context.Context, request domain.SearchRequest) (do
 
 	results, err := Parse(body, request.Limit)
 	if err != nil {
-		attempt.Classification = string(detector.ParseChanged)
+		attempt.Classification = detector.ParseChanged
 		attempt.ParserError = err.Error()
 		attempt.OriginalError = err.Error()
 		return domain.SearchResponse{}, searchError(domain.ErrUpstreamChanged, true, err, attempt)
 	}
-	attempt.Classification = string(detector.Normal)
+	attempt.Classification = detector.Normal
 	response := domain.SearchResponse{
 		Query: request.Query, Provider: p.Name(), Results: results,
 		Meta: domain.Meta{

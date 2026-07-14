@@ -1,8 +1,8 @@
 # Web Search Backend Demo
 
-一个面向人类客户端和 AI Agent 的 Go + Gin 网页搜索 API。项目定义了通用 `Provider` 接口，第一版只注册 `BaiduProvider`。
+一个面向人类客户端和 AI Agent 的 Go + Gin 网页搜索 API。项目通过通用 `Provider` 接口注册 Baidu、DuckDuckGo、Bing 和自动 fallback Chain。
 
-当前实现不使用付费 SERP API，也不抓取搜索结果目标网页的正文。它直接读取百度公开搜索结果页，并通过多链路 fallback、缓存、限流、抖动和熔断提供 best-effort 可用性。
+当前实现不使用付费 SERP API，也不抓取搜索结果目标网页的正文。它直接读取公开搜索结果页，并通过跨 Provider fallback、Provider 内部 transport fallback、缓存、限流、抖动和熔断提供 best-effort 可用性。
 
 ## 架构
 
@@ -12,23 +12,32 @@ flowchart TD
     Gin --> Service["SearchService"]
     Service --> Fresh["Fresh Cache"]
     Service --> Registry["Provider Registry"]
-    Registry --> Baidu["BaiduProvider"]
+    Registry --> Auto["ProviderChain: auto"]
+    Auto --> Baidu["BaiduProvider"]
+    Auto --> Duck["DuckDuckGoProvider"]
+    Auto --> Bing["BingProvider"]
     Baidu --> Desktop["Desktop HTTP"]
     Desktop -->|失败| Mobile["Mobile HTTP"]
     Mobile -->|失败| Chrome["Chromedp"]
     Desktop --> Detector["Detector + Parser"]
     Mobile --> Detector
     Chrome --> Detector
+    Duck --> DuckHTTP["DuckDuckGo HTML HTTP"]
+    Bing --> BingChrome["Bing Chromedp"]
     Service -->|实时失败| Stale["Stale Cache"]
     Baidu --> Artifacts["HTML / Screenshot Artifacts"]
+    Bing --> Artifacts
 ```
 
 职责边界：
 
 - Gin：路由、query binding、request ID、客户端限流和 JSON 编码。
 - SearchService：参数归一化、fresh/stale cache 和 `singleflight`。
-- Provider Registry：按名称查找搜索源，当前仅含 `baidu`。
+- Provider Registry：按名称查找 `auto`、`baidu`、`duckduckgo` 和 `bing`。
+- ProviderChain：默认按 `baidu → duckduckgo → bing` 执行跨搜索源 fallback。
 - BaiduProvider：编排 `desktop_http → mobile_http → chromedp`。
+- DuckDuckGoProvider：读取轻量 HTML 搜索页，不启动浏览器。
+- BingProvider：使用独立 Chromedp Profile 读取 Bing 结果页。
 - Detector：区分正常页、空结果、验证码、429、封禁和 DOM 变化。
 - Parser：分别解析桌面页、移动页和浏览器 DOM。
 - DebugArtifactStore：保存完整 HTML、截图以及 SHA-256。
@@ -58,7 +67,7 @@ go run ./cmd/server
 ```bash
 curl --get 'http://127.0.0.1:8080/v1/search' \
   --data-urlencode 'q=golang' \
-  --data 'provider=baidu' \
+  --data 'provider=auto' \
   --data 'limit=10' \
   --data 'page=1'
 ```
@@ -108,7 +117,7 @@ docker-compose down --volumes
 | 参数 | 必填 | 默认值 | 范围 |
 |---|---:|---:|---|
 | `q` | 是 | - | 1–256 个字符 |
-| `provider` | 否 | `baidu` | 第一版仅支持 `baidu` |
+| `provider` | 否 | `auto` | 支持 `auto`、`baidu`、`duckduckgo`、`bing`；显式 Provider 不跨源 fallback |
 | `limit` | 否 | `10` | 1–20 |
 | `page` | 否 | `1` | 1–10 |
 | `refresh` | 否 | `false` | `true` 跳过 fresh cache，强制实时查询 |
@@ -129,10 +138,12 @@ docker-compose down --volumes
     }
   ],
   "meta": {
+    "requested_provider": "auto",
     "transport": "desktop_http",
     "cached": false,
     "degraded": false,
     "fallback_count": 0,
+    "provider_fallback_count": 0,
     "took_ms": 382,
     "request_id": "req_01J..."
   },
@@ -144,7 +155,9 @@ docker-compose down --volumes
 }
 ```
 
-`transport` 可能是 `desktop_http`、`mobile_http`、`chromedp`、`fresh_cache` 或 `stale_cache`。
+顶层 `provider` 是实际返回结果的搜索源；`requested_provider` 是调用方选择的值。`fallback_count` 表示单个 Provider 内部 transport fallback 次数，`provider_fallback_count` 表示跨 Provider fallback 次数。
+
+`transport` 可能是 `desktop_http`、`mobile_http`、`chromedp`、`duckduckgo_http`、`bing_chromedp`、`fresh_cache` 或 `stale_cache`。
 
 ### 强制刷新
 
@@ -247,6 +260,8 @@ Demo 默认 `SEARCH_DEBUG=true`。失败响应同时提供稳定错误码和原�
 - CAPTCHA 对相应 Transport 熔断 30 分钟。
 - HTTP 429 对相应 Transport 熔断 5 分钟。
 - Chromedp 使用持久化 Profile，最大并发为 1。
+- Baidu 和 Bing 使用不同的 Chrome Profile，Cookie 与 Session 不共享。
+- `auto` 只对验证码、限流、超时、上游结构变化和 Provider 不可用执行跨源 fallback。
 - 实时失败且存在 stale cache 时返回 HTTP 200、`degraded=true`，并附带本次实时失败 attempts。
 
 ## 环境变量
@@ -259,6 +274,7 @@ Demo 默认 `SEARCH_DEBUG=true`。失败响应同时提供稳定错误码和原�
 | `SEARCH_DEBUG_DIR` | `./var/debug` | HTML/截图目录 |
 | `SEARCH_DEBUG_PREVIEW_BYTES` | `32768` | API 正文 preview 上限 |
 | `SEARCH_CHROME_PROFILE_DIR` | `./var/chrome-profile` | 持久化 Chrome Profile |
+| `SEARCH_BING_PROFILE_DIR` | `./var/chrome-profile-bing` | Bing 独立 Chrome Profile |
 | `SEARCH_CHROME_PATH` | 空 | Chrome/Chromium 可执行文件 |
 | `SEARCH_CHROME_HEADLESS` | `true` | 是否无头运行 |
 | `SEARCH_CHROME_NO_SANDBOX` | `false` | Docker 中可设为 `true` |
@@ -266,6 +282,10 @@ Demo 默认 `SEARCH_DEBUG=true`。失败响应同时提供稳定错误码和原�
 | `SEARCH_DESKTOP_TIMEOUT` | `4s` | Desktop HTTP 超时 |
 | `SEARCH_MOBILE_TIMEOUT` | `4s` | Mobile HTTP 超时 |
 | `SEARCH_CHROME_TIMEOUT` | `10s` | Chromedp 超时 |
+| `SEARCH_DUCKDUCKGO_URL` | `https://html.duckduckgo.com/html/` | DuckDuckGo HTML 搜索地址 |
+| `SEARCH_DUCKDUCKGO_TIMEOUT` | `5s` | DuckDuckGo HTTP 超时 |
+| `SEARCH_BING_URL` | `https://www.bing.com/search` | Bing 搜索地址 |
+| `SEARCH_BING_TIMEOUT` | `10s` | Bing Chromedp 超时 |
 | `SEARCH_FRESH_TTL` | `15m` | fresh cache TTL |
 | `SEARCH_STALE_TTL` | `24h` | stale 最大年龄 |
 | `SEARCH_PROVIDER_RATE` | `1` | Provider token/s |
@@ -288,12 +308,13 @@ make check
 
 `make check` 顺序执行普通测试、Race Detector、`go vet` 和二进制构建。也可以单独执行 `make test`、`make test-race`、`make vet` 或 `make build`。
 
-离线端到端测试会启动本地假百度服务器，完整验证 Gin、SearchService、Provider、Transport、Detector 和 Parser 链路。
+离线端到端测试会启动本地假百度和 DuckDuckGo 服务器，并通过静态 Bing fixture 完整验证 Gin、SearchService、ProviderChain、Provider、Transport、Detector 和 Parser 链路。
 
 ## 边界
 
-- 本项目无法保证百度永不返回验证码。
+- 本项目无法保证百度、DuckDuckGo 或 Bing 永不返回验证码或限流。
 - 不自动解题、破解或绕过验证码。
 - 持久化 Profile、缓存、低频率、jitter 和熔断用于减少触发概率及避免反复冲击上游。
-- 百度调整 DOM 后需要更新 Parser fixture 和 selector。
-- 免费、精确百度排名、无人值守高可用三项无法同时得到保证；本 Demo 对不可用情况返回明确、可诊断的结构化结果。
+- 搜索引擎调整 DOM 后需要更新对应 Parser fixture 和 selector。
+- `auto` fallback 返回的是实际成功搜索源的排名；它不能冒充百度排名。
+- 免费、固定搜索源精确排名、无人值守高可用无法同时得到保证；本 Demo 对不可用情况返回明确、可诊断的结构化结果。

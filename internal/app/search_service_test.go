@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -124,6 +125,9 @@ func TestSearchServiceReturnsStaleWithCurrentOriginalError(t *testing.T) {
 	}
 	if len(got.Warnings) == 0 || got.Warnings[len(got.Warnings)-1].Code != "live_search_unavailable" {
 		t.Fatalf("warnings=%#v", got.Warnings)
+	}
+	if strings.Contains(got.Warnings[len(got.Warnings)-1].Message, "百度") || !strings.Contains(got.Warnings[len(got.Warnings)-1].Message, "Provider") {
+		t.Fatalf("warning=%+v", got.Warnings[len(got.Warnings)-1])
 	}
 }
 

@@ -49,7 +49,7 @@ func (h *handler) search(c *gin.Context) {
 	}
 	query.Q = strings.TrimSpace(query.Q)
 	if query.Provider == "" {
-		query.Provider = string(domain.ProviderNameBaidu)
+		query.Provider = string(domain.ProviderNameAuto)
 	}
 	if query.Limit == 0 {
 		query.Limit = 10
@@ -80,7 +80,7 @@ func (h *handler) search(c *gin.Context) {
 	}
 	response, err := h.searcher.Search(ctx, request)
 	if err != nil {
-		writeError(c, err, effectiveDebug)
+		writeError(c, err, effectiveDebug, domain.ProviderName(query.Provider))
 		return
 	}
 	if response.Query == "" {
@@ -113,16 +113,20 @@ func validDebugToken(configured, presented string) bool {
 	return subtle.ConstantTimeCompare(expectedHash[:], presentedHash[:]) == 1
 }
 
-func writeError(c *gin.Context, err error, debug bool) {
+func writeError(c *gin.Context, err error, debug bool, requestedProviders ...domain.ProviderName) {
 	var searchErr *domain.SearchError
 	if !errors.As(err, &searchErr) {
 		searchErr = &domain.SearchError{
 			Code: domain.ErrProviderUnavailable, Message: "服务内部错误", Retryable: true, Original: err,
 		}
 	}
+	requestedProvider := domain.ProviderNameAuto
+	if len(requestedProviders) > 0 && requestedProviders[0] != "" {
+		requestedProvider = requestedProviders[0]
+	}
 	body := errorResponse{
 		Error: errorBody{Code: searchErr.Code, Message: searchErr.Message, Retryable: searchErr.Retryable},
-		Meta:  errorMeta{Provider: domain.ProviderNameBaidu, RequestID: requestID(c)},
+		Meta:  errorMeta{Provider: requestedProvider, RequestID: requestID(c)},
 	}
 	if debug {
 		body.Error.OriginalError = searchErr.Error()
