@@ -76,6 +76,8 @@ const (
 	WarningCodeProviderFallback WarningCode = "provider_fallback"
 	// WarningCodeRedirectURLUnresolved indicates a search-engine redirect URL was preserved.
 	WarningCodeRedirectURLUnresolved WarningCode = "redirect_url_unresolved"
+	// WarningCodePartialReadableResults indicates fewer usable bodies than requested.
+	WarningCodePartialReadableResults WarningCode = "partial_readable_results"
 )
 
 type SearchRequest struct {
