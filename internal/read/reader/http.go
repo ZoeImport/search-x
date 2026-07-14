@@ -68,6 +68,14 @@ func (e *Error) ReadErrorCode() domain.ErrorCode {
 	return e.Code
 }
 
+// HTTPStatusCode returns the last upstream status for fallback decisions.
+func (e *Error) HTTPStatusCode() int {
+	if e == nil {
+		return 0
+	}
+	return e.StatusCode
+}
+
 // HTTPReader reads HTML and plain-text resources through pinned addresses.
 type HTTPReader struct {
 	policy        readpipeline.URLPolicy

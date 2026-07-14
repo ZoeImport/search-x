@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 	"unicode/utf8"
 
@@ -153,7 +154,10 @@ func (s *ReadService) Read(ctx context.Context, request domain.ReadRequest) (dom
 func (s *ReadService) readLive(ctx context.Context, target domain.SafeTarget, policyAttempt domain.ReadAttempt) (liveReadResult, error) {
 	document, resource, extractorName, attempts, err := s.readAndExtract(ctx, s.config.HTTPReader, target, []domain.ReadAttempt{policyAttempt})
 	if err != nil {
-		return liveReadResult{}, err
+		if s.config.BrowserReader == nil || !browserFallbackEligible(err) {
+			return liveReadResult{}, err
+		}
+		return s.readRendered(ctx, target, attemptsFromReadError(err))
 	}
 	qualityStarted := s.config.Now()
 	qualityResult := s.config.Evaluator.Evaluate(document, resource)
@@ -170,26 +174,48 @@ func (s *ReadService) readLive(ctx context.Context, target domain.SafeTarget, po
 			err = fmt.Errorf("browser fallback is disabled: %s", qualityResult.Reason)
 			return liveReadResult{}, readError(domain.ErrExtractionFailed, "网页正文需要浏览器渲染，但浏览器 fallback 未启用", false, err, attempts)
 		}
-		document, resource, extractorName, attempts, err = s.readAndExtract(ctx, s.config.BrowserReader, target, attempts)
-		if err != nil {
-			return liveReadResult{}, err
-		}
-		qualityStarted = s.config.Now()
-		qualityResult = s.config.Evaluator.Evaluate(document, resource)
-		attempts = append(attempts, domain.ReadAttempt{
-			Stage: domain.ReadStageQuality, Implementation: s.config.Evaluator.Name(),
-			Classification: qualityResult.Classification, RequestURL: resource.URL, FinalURL: resource.FinalURL,
-			ElapsedMS: s.config.Now().Sub(qualityStarted).Milliseconds(),
-		})
-		if qualityResult.Action != domain.QualityActionAccept {
-			err = fmt.Errorf("rendered content rejected: %s", qualityResult.Reason)
-			return liveReadResult{}, qualityRejectionError(qualityResult, "浏览器渲染后仍未提取到有效正文", err, attempts)
-		}
-		return liveReadResult{document: document, transport: resource.Transport, extractor: extractorName, fallbackCount: 1, attempts: attempts}, nil
+		return s.readRendered(ctx, target, attempts)
 	default:
 		err = fmt.Errorf("content rejected: %s", qualityResult.Reason)
 		return liveReadResult{}, qualityRejectionError(qualityResult, "未提取到有效网页正文", err, attempts)
 	}
+}
+
+func (s *ReadService) readRendered(ctx context.Context, target domain.SafeTarget, attempts []domain.ReadAttempt) (liveReadResult, error) {
+	document, resource, extractorName, attempts, err := s.readAndExtract(ctx, s.config.BrowserReader, target, attempts)
+	if err != nil {
+		return liveReadResult{}, err
+	}
+	qualityStarted := s.config.Now()
+	qualityResult := s.config.Evaluator.Evaluate(document, resource)
+	attempts = append(attempts, domain.ReadAttempt{
+		Stage: domain.ReadStageQuality, Implementation: s.config.Evaluator.Name(),
+		Classification: qualityResult.Classification, RequestURL: resource.URL, FinalURL: resource.FinalURL,
+		ElapsedMS: s.config.Now().Sub(qualityStarted).Milliseconds(),
+	})
+	if qualityResult.Action != domain.QualityActionAccept {
+		err = fmt.Errorf("rendered content rejected: %s", qualityResult.Reason)
+		return liveReadResult{}, qualityRejectionError(qualityResult, "浏览器渲染后仍未提取到有效正文", err, attempts)
+	}
+	return liveReadResult{document: document, transport: resource.Transport, extractor: extractorName, fallbackCount: 1, attempts: attempts}, nil
+}
+
+func browserFallbackEligible(err error) bool {
+	switch readErrorCode(err) {
+	case domain.ErrCaptchaRequired, domain.ErrExtractionFailed:
+		return true
+	case domain.ErrFetchFailed:
+		var statusError interface{ HTTPStatusCode() int }
+		if !errors.As(err, &statusError) {
+			return false
+		}
+		switch statusError.HTTPStatusCode() {
+		case http.StatusForbidden, http.StatusTooManyRequests, http.StatusServiceUnavailable:
+			return true
+		}
+	default:
+	}
+	return false
 }
 
 func (s *ReadService) readAndExtract(ctx context.Context, reader readpipe.ResourceReader, target domain.SafeTarget, attempts []domain.ReadAttempt) (domain.ReadDocument, domain.Resource, domain.ImplementationName, []domain.ReadAttempt, error) {
@@ -236,18 +262,29 @@ func (s *ReadService) readAndExtract(ctx context.Context, reader readpipe.Resour
 	}
 	extractStarted := s.config.Now()
 	document, err := extractor.Extract(ctx, resource)
+	extractorName := extractor.Name()
+	if document.Extractor != "" {
+		extractorName = document.Extractor
+	}
 	extractAttempt := domain.ReadAttempt{
-		Stage: domain.ReadStageExtract, Implementation: extractor.Name(), Classification: domain.ReadClassificationSuccess,
+		Stage: domain.ReadStageExtract, Implementation: extractorName, Classification: domain.ReadClassificationSuccess,
 		RequestURL: resource.URL, FinalURL: resource.FinalURL, ElapsedMS: s.config.Now().Sub(extractStarted).Milliseconds(),
 	}
 	if err != nil {
+		code := readErrorCode(err)
 		extractAttempt.Classification = domain.ReadClassificationRejected
+		if code == domain.ErrCaptchaRequired {
+			extractAttempt.Classification = domain.ReadClassificationCaptcha
+		}
 		extractAttempt.OriginalError = err.Error()
 		attempts = append(attempts, extractAttempt)
-		return domain.ReadDocument{}, resource, extractor.Name(), attempts, readError(domain.ErrExtractionFailed, "网页正文提取失败", false, err, attempts)
+		if code == domain.ErrCaptchaRequired {
+			return domain.ReadDocument{}, resource, extractorName, attempts, readError(code, "目标网页要求安全验证", true, err, attempts)
+		}
+		return domain.ReadDocument{}, resource, extractorName, attempts, readError(domain.ErrExtractionFailed, "网页正文提取失败", false, err, attempts)
 	}
 	attempts = append(attempts, extractAttempt)
-	return document, resource, extractor.Name(), attempts, nil
+	return document, resource, extractorName, attempts, nil
 }
 
 func (s *ReadService) formatResponse(ctx context.Context, request domain.ReadRequest, document domain.ReadDocument, transport domain.ReadTransport, extractor domain.ImplementationName, fallbackCount int, cached, degraded bool, warnings []domain.ReadWarning, attempts []domain.ReadAttempt, started time.Time) (domain.ReadResponse, error) {
@@ -349,6 +386,9 @@ func attemptsFromReadError(err error) []domain.ReadAttempt {
 }
 
 func cachedExtractor(document domain.ReadDocument) domain.ImplementationName {
+	if document.Extractor != "" {
+		return document.Extractor
+	}
 	if document.SourceType == domain.SourceTypePlainText {
 		return domain.ImplementationNamePlainTextExtractor
 	}

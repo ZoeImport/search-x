@@ -3,13 +3,16 @@
 GO ?= go
 BINARY ?= bin/search-api
 Q ?= golang
+LOG_DIR ?= log
+LOG_FILE ?= $(LOG_DIR)/server.log
 COMPOSE ?= $(shell if docker compose version >/dev/null 2>&1; then echo "docker compose"; elif command -v docker-compose >/dev/null 2>&1; then echo "docker-compose"; fi)
 
 .PHONY: run build test test-race vet check smoke require-compose docker-build docker-up docker-down docker-logs docker-ps help
 .NOTPARALLEL: check
 
 run: ## Run the Gin API locally
-	$(GO) run ./cmd/server
+	mkdir -p $(LOG_DIR)
+	set -o pipefail; $(GO) run ./cmd/server 2>&1 | tee -a $(LOG_FILE)
 
 build: ## Build the API binary
 	mkdir -p $(dir $(BINARY))

@@ -51,6 +51,14 @@ type Config struct {
 	ReadEnabled bool
 	// ReadHTTPTimeout limits the direct HTTP read stage.
 	ReadHTTPTimeout time.Duration
+	// ReadBrowserEnabled enables browser rendering after eligible HTTP read failures.
+	ReadBrowserEnabled bool
+	// ReadBrowserTimeout limits one browser-rendered read attempt.
+	ReadBrowserTimeout time.Duration
+	// ReadBrowserWait allows page scripts to replace an initial JavaScript shell.
+	ReadBrowserWait time.Duration
+	// ReadChromeProfileDir stores the isolated content-reader browser profile.
+	ReadChromeProfileDir string
 	// ReadFreshTTL controls fresh read-document cache entries.
 	ReadFreshTTL time.Duration
 	// ReadStaleTTL controls stale read-document cache entries.
@@ -68,41 +76,45 @@ type Config struct {
 // Load reads environment overrides and rejects invalid configuration.
 func Load() (Config, error) {
 	config := Config{
-		Address:           ":8080",
-		Debug:             true,
-		DebugDir:          "./var/debug",
-		DebugPreviewBytes: 32 * 1024,
-		ChromeProfileDir:  "./var/chrome-profile",
-		BingProfileDir:    "./var/chrome-profile-bing",
-		ChromeHeadless:    true,
-		DesktopURL:        "https://www.baidu.com/s",
-		MobileURL:         "https://m.baidu.com/s",
-		DuckDuckGoURL:     "https://html.duckduckgo.com/html/",
-		BingURL:           "https://www.bing.com/search",
-		UserAgent:         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0 Safari/537.36",
-		TotalTimeout:      20 * time.Second,
-		DesktopTimeout:    4 * time.Second,
-		MobileTimeout:     4 * time.Second,
-		ChromeTimeout:     10 * time.Second,
-		DuckDuckGoTimeout: 5 * time.Second,
-		BingTimeout:       10 * time.Second,
-		FreshTTL:          15 * time.Minute,
-		StaleTTL:          24 * time.Hour,
-		ProviderRate:      1,
-		ProviderBurst:     3,
-		JitterMin:         200 * time.Millisecond,
-		JitterMax:         800 * time.Millisecond,
-		ClientRate:        5,
-		ClientBurst:       10,
-		CacheMaxItems:     1000,
-		MaxBodyBytes:      4 << 20,
-		ReadEnabled:       true,
-		ReadHTTPTimeout:   6 * time.Second,
-		ReadFreshTTL:      30 * time.Minute,
-		ReadStaleTTL:      24 * time.Hour,
-		ReadCacheMaxItems: 500,
-		ReadMaxBodyBytes:  5 << 20,
-		ReadMaxRedirects:  5,
+		Address:              ":8080",
+		Debug:                true,
+		DebugDir:             "./var/debug",
+		DebugPreviewBytes:    32 * 1024,
+		ChromeProfileDir:     "./var/chrome-profile",
+		BingProfileDir:       "./var/chrome-profile-bing",
+		ChromeHeadless:       true,
+		DesktopURL:           "https://www.baidu.com/s",
+		MobileURL:            "https://m.baidu.com/s",
+		DuckDuckGoURL:        "https://html.duckduckgo.com/html/",
+		BingURL:              "https://www.bing.com/search",
+		UserAgent:            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0 Safari/537.36",
+		TotalTimeout:         20 * time.Second,
+		DesktopTimeout:       4 * time.Second,
+		MobileTimeout:        4 * time.Second,
+		ChromeTimeout:        10 * time.Second,
+		DuckDuckGoTimeout:    5 * time.Second,
+		BingTimeout:          10 * time.Second,
+		FreshTTL:             15 * time.Minute,
+		StaleTTL:             24 * time.Hour,
+		ProviderRate:         1,
+		ProviderBurst:        3,
+		JitterMin:            200 * time.Millisecond,
+		JitterMax:            800 * time.Millisecond,
+		ClientRate:           5,
+		ClientBurst:          10,
+		CacheMaxItems:        1000,
+		MaxBodyBytes:         4 << 20,
+		ReadEnabled:          true,
+		ReadHTTPTimeout:      6 * time.Second,
+		ReadBrowserEnabled:   true,
+		ReadBrowserTimeout:   12 * time.Second,
+		ReadBrowserWait:      2 * time.Second,
+		ReadChromeProfileDir: "./var/chrome-profile-read",
+		ReadFreshTTL:         30 * time.Minute,
+		ReadStaleTTL:         24 * time.Hour,
+		ReadCacheMaxItems:    500,
+		ReadMaxBodyBytes:     5 << 20,
+		ReadMaxRedirects:     5,
 	}
 
 	stringValues := []struct {
@@ -115,6 +127,7 @@ func Load() (Config, error) {
 		{"SEARCH_CHROME_PROFILE_DIR", &config.ChromeProfileDir},
 		{"SEARCH_BING_PROFILE_DIR", &config.BingProfileDir},
 		{"SEARCH_CHROME_PATH", &config.ChromePath},
+		{"SEARCH_READ_CHROME_PROFILE_DIR", &config.ReadChromeProfileDir},
 		{"SEARCH_DESKTOP_URL", &config.DesktopURL},
 		{"SEARCH_MOBILE_URL", &config.MobileURL},
 		{"SEARCH_DUCKDUCKGO_URL", &config.DuckDuckGoURL},
@@ -135,6 +148,7 @@ func Load() (Config, error) {
 		{"SEARCH_CHROME_HEADLESS", &config.ChromeHeadless},
 		{"SEARCH_CHROME_NO_SANDBOX", &config.ChromeNoSandbox},
 		{"SEARCH_READ_ENABLED", &config.ReadEnabled},
+		{"SEARCH_READ_BROWSER_ENABLED", &config.ReadBrowserEnabled},
 	} {
 		if err := parseBoolEnv(item.key, item.target); err != nil {
 			return Config{}, err
@@ -152,6 +166,8 @@ func Load() (Config, error) {
 		{"SEARCH_DUCKDUCKGO_TIMEOUT", &config.DuckDuckGoTimeout},
 		{"SEARCH_BING_TIMEOUT", &config.BingTimeout},
 		{"SEARCH_READ_HTTP_TIMEOUT", &config.ReadHTTPTimeout},
+		{"SEARCH_READ_BROWSER_TIMEOUT", &config.ReadBrowserTimeout},
+		{"SEARCH_READ_BROWSER_WAIT", &config.ReadBrowserWait},
 		{"SEARCH_READ_FRESH_TTL", &config.ReadFreshTTL},
 		{"SEARCH_READ_STALE_TTL", &config.ReadStaleTTL},
 		{"SEARCH_FRESH_TTL", &config.FreshTTL},
@@ -220,8 +236,8 @@ func Load() (Config, error) {
 		}
 	}
 
-	if config.Address == "" || config.DebugDir == "" || config.ChromeProfileDir == "" || config.BingProfileDir == "" {
-		return Config{}, fmt.Errorf("search address, debug directory, and search browser profiles must not be empty")
+	if config.Address == "" || config.DebugDir == "" || config.ChromeProfileDir == "" || config.BingProfileDir == "" || config.ReadChromeProfileDir == "" {
+		return Config{}, fmt.Errorf("search address, debug directory, and browser profiles must not be empty")
 	}
 	if config.StaleTTL <= config.FreshTTL {
 		return Config{}, fmt.Errorf("SEARCH_STALE_TTL must be greater than SEARCH_FRESH_TTL")

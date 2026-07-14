@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync/atomic"
@@ -63,6 +64,38 @@ func (fakeReadExtractor) Extract(_ context.Context, resource domain.Resource) (d
 	}, nil
 }
 
+type failingReadExtractor struct {
+	err error
+}
+
+func (failingReadExtractor) Name() domain.ImplementationName {
+	return domain.ImplementationNameHTMLExtractor
+}
+func (failingReadExtractor) SourceTypes() []domain.SourceType {
+	return []domain.SourceType{domain.SourceTypeHTML}
+}
+func (extractor failingReadExtractor) Extract(context.Context, domain.Resource) (domain.ReadDocument, error) {
+	return domain.ReadDocument{}, extractor.err
+}
+
+type browserFallbackReadExtractor struct{}
+
+func (browserFallbackReadExtractor) Name() domain.ImplementationName {
+	return domain.ImplementationNameHTMLExtractor
+}
+func (browserFallbackReadExtractor) SourceTypes() []domain.SourceType {
+	return []domain.SourceType{domain.SourceTypeHTML}
+}
+func (browserFallbackReadExtractor) Extract(_ context.Context, resource domain.Resource) (domain.ReadDocument, error) {
+	if resource.Transport == domain.ReadTransportHTTP {
+		return domain.ReadDocument{}, codedReadFailure{code: domain.ErrCaptchaRequired}
+	}
+	return domain.ReadDocument{
+		URL: resource.URL, FinalURL: resource.FinalURL, Title: "Rendered Article",
+		SourceType: domain.SourceTypeHTML, ContentText: string(resource.Body), ContentHTML: "<p>" + string(resource.Body) + "</p>",
+	}, nil
+}
+
 type fakeExtractorRegistry struct{ extractor readpipe.ContentExtractor }
 
 func (r fakeExtractorRegistry) Resolve(domain.SourceType) (readpipe.ContentExtractor, error) {
@@ -110,11 +143,13 @@ type fakeReadCache struct {
 }
 
 type codedReadFailure struct {
-	code domain.ErrorCode
+	code       domain.ErrorCode
+	httpStatus int
 }
 
 func (e codedReadFailure) Error() string                   { return "coded read failure" }
 func (e codedReadFailure) ReadErrorCode() domain.ErrorCode { return e.code }
+func (e codedReadFailure) HTTPStatusCode() int             { return e.httpStatus }
 
 func (c *fakeReadCache) GetFresh(context.Context, string) (domain.ReadDocument, bool) {
 	return c.fresh, c.fresh.URL != ""
@@ -255,6 +290,83 @@ func TestReadServiceMapsCaptchaQualityToCaptchaError(t *testing.T) {
 	var readErr *domain.ReadError
 	if !errors.As(err, &readErr) || readErr.Code != domain.ErrCaptchaRequired || !readErr.Retryable {
 		t.Fatalf("error=%#v", err)
+	}
+}
+
+func TestReadServicePreservesExtractorCaptchaClassification(t *testing.T) {
+	targetURL, err := url.Parse("https://example.com/article")
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpReader := &fakeResourceReader{name: domain.ImplementationNameHTTPReader, resource: domain.Resource{
+		URL: targetURL.String(), FinalURL: targetURL.String(), ContentType: "text/html", Body: []byte("challenge"), Transport: domain.ReadTransportHTTP,
+	}}
+	service, err := NewReadService(ReadServiceConfig{
+		Policy: fakeURLPolicy{target: domain.SafeTarget{URL: targetURL}}, HTTPReader: httpReader,
+		Detector: fakeSourceDetector{}, Extractors: fakeExtractorRegistry{extractor: failingReadExtractor{err: codedReadFailure{code: domain.ErrCaptchaRequired}}},
+		Evaluator: fakeReadEvaluator{}, Converters: fakeConverterRegistry{converter: fakeReadConverter{}}, Cache: &fakeReadCache{}, Now: time.Now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.Read(context.Background(), domain.ReadRequest{URL: targetURL.String(), Format: domain.OutputFormatText, MaxChars: 1000, Refresh: true})
+	var readErr *domain.ReadError
+	if !errors.As(err, &readErr) || readErr.Code != domain.ErrCaptchaRequired {
+		t.Fatalf("error = %#v, want captcha_required", err)
+	}
+}
+
+func TestReadServiceFallsBackToBrowserWhenHTTPExtractionNeedsRendering(t *testing.T) {
+	targetURL, err := url.Parse("https://example.com/article")
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpReader := &fakeResourceReader{name: domain.ImplementationNameHTTPReader, resource: domain.Resource{
+		URL: targetURL.String(), FinalURL: targetURL.String(), ContentType: "text/html", Body: []byte("challenge"), Transport: domain.ReadTransportHTTP,
+	}}
+	browserReader := &fakeResourceReader{name: domain.ImplementationNameChromedpReader, resource: domain.Resource{
+		URL: targetURL.String(), FinalURL: targetURL.String(), ContentType: "text/html", Body: []byte("rendered body"), Transport: domain.ReadTransportChromedp,
+	}}
+	service, err := NewReadService(ReadServiceConfig{
+		Policy: fakeURLPolicy{target: domain.SafeTarget{URL: targetURL}}, HTTPReader: httpReader, BrowserReader: browserReader,
+		Detector: fakeSourceDetector{}, Extractors: fakeExtractorRegistry{extractor: browserFallbackReadExtractor{}},
+		Evaluator: fakeReadEvaluator{}, Converters: fakeConverterRegistry{converter: fakeReadConverter{}}, Cache: &fakeReadCache{}, Now: time.Now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := service.Read(context.Background(), domain.ReadRequest{
+		URL: targetURL.String(), Format: domain.OutputFormatText, MaxChars: 1000, Refresh: true, Debug: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Content != "rendered body" || response.Meta.Transport != domain.ReadTransportChromedp || response.Meta.FallbackCount != 1 || browserReader.calls != 1 {
+		t.Fatalf("response=%#v browser_calls=%d", response, browserReader.calls)
+	}
+}
+
+func TestReadServiceFallsBackToBrowserWhenHTTPReturnsForbidden(t *testing.T) {
+	targetURL, err := url.Parse("https://example.com/article")
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpReader := &fakeResourceReader{
+		name: domain.ImplementationNameHTTPReader,
+		err:  codedReadFailure{code: domain.ErrFetchFailed, httpStatus: http.StatusForbidden},
+	}
+	browserReader := &fakeResourceReader{name: domain.ImplementationNameChromedpReader, resource: domain.Resource{
+		URL: targetURL.String(), FinalURL: targetURL.String(), ContentType: "text/html", Body: []byte("rendered forbidden body"), Transport: domain.ReadTransportChromedp,
+	}}
+	service := newReadServiceForTest(t, httpReader, browserReader, fakeReadEvaluator{}, &fakeReadCache{})
+	response, err := service.Read(context.Background(), domain.ReadRequest{
+		URL: targetURL.String(), Format: domain.OutputFormatText, MaxChars: 1000, Refresh: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Content != "rendered forbidden body" || response.Meta.Transport != domain.ReadTransportChromedp || browserReader.calls != 1 {
+		t.Fatalf("response=%#v browser_calls=%d", response, browserReader.calls)
 	}
 }
 

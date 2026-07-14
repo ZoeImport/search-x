@@ -20,6 +20,7 @@ import (
 	"web-search-backend/internal/provider/baidu"
 	"web-search-backend/internal/provider/bing"
 	"web-search-backend/internal/provider/duckduckgo"
+	readpipe "web-search-backend/internal/read"
 	readcache "web-search-backend/internal/read/cache"
 	"web-search-backend/internal/read/converter"
 	"web-search-backend/internal/read/detector"
@@ -98,7 +99,11 @@ func New(config config.Config) (*App, error) {
 		chromeClient.Close()
 		return nil, fmt.Errorf("create Bing chromedp transport: %w", err)
 	}
+	var readChromeClient *chromebrowser.Client
 	closeBrowsers := func() {
+		if readChromeClient != nil {
+			readChromeClient.Close()
+		}
 		bingChromeClient.Close()
 		chromeClient.Close()
 	}
@@ -146,7 +151,32 @@ func New(config config.Config) (*App, error) {
 			closeBrowsers()
 			return nil, fmt.Errorf("create read HTTP reader: %w", err)
 		}
-		extractors, err := extractor.NewRegistry(extractor.HTMLExtractor{}, extractor.PlainTextExtractor{})
+		var browserReader readpipe.ResourceReader
+		if config.ReadBrowserEnabled {
+			readChromeClient, err = chromebrowser.New(chromebrowser.Config{
+				ProfileDir: config.ReadChromeProfileDir, ExecPath: config.ChromePath,
+				Timeout: config.ReadBrowserTimeout, PostLoadWait: config.ReadBrowserWait,
+				Headless: config.ChromeHeadless, DisableSandbox: config.ChromeNoSandbox,
+				MaxBodyBytes: int(config.ReadMaxBodyBytes),
+			}, func(request domain.SearchRequest) (string, error) {
+				return request.Query, nil
+			})
+			if err != nil {
+				closeBrowsers()
+				return nil, fmt.Errorf("create read chromedp transport: %w", err)
+			}
+			browserReader, err = readreader.NewBrowserReader(readPolicy, readChromeClient, config.ReadMaxBodyBytes)
+			if err != nil {
+				closeBrowsers()
+				return nil, fmt.Errorf("create browser reader: %w", err)
+			}
+		}
+		htmlExtractor, err := extractor.NewHTMLExtractor()
+		if err != nil {
+			closeBrowsers()
+			return nil, fmt.Errorf("create HTML extractor: %w", err)
+		}
+		extractors, err := extractor.NewRegistry(htmlExtractor, extractor.PlainTextExtractor{})
 		if err != nil {
 			closeBrowsers()
 			return nil, fmt.Errorf("create read extractor registry: %w", err)
@@ -162,7 +192,7 @@ func New(config config.Config) (*App, error) {
 			return nil, fmt.Errorf("create read cache: %w", err)
 		}
 		readService, err = app.NewReadService(app.ReadServiceConfig{
-			Policy: readPolicy, HTTPReader: httpReader,
+			Policy: readPolicy, HTTPReader: httpReader, BrowserReader: browserReader,
 			Detector: detector.NewMIMETypeDetector(), Extractors: extractors,
 			Evaluator: quality.NewArticleQualityEvaluator(200), Converters: converters,
 			Cache: readMemoryCache, OperationTimeout: config.TotalTimeout, Now: time.Now,

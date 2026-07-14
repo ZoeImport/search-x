@@ -19,9 +19,11 @@ import (
 type URLBuilder func(domain.SearchRequest) (string, error)
 
 type Config struct {
-	ProfileDir     string
-	ExecPath       string
-	Timeout        time.Duration
+	ProfileDir string
+	ExecPath   string
+	Timeout    time.Duration
+	// PostLoadWait allows page scripts to replace an initial JavaScript shell before DOM capture.
+	PostLoadWait   time.Duration
 	Headless       bool
 	DisableSandbox bool
 	MaxBodyBytes   int
@@ -93,6 +95,18 @@ func (c *Client) Fetch(ctx context.Context, request domain.SearchRequest) (trans
 	if err != nil {
 		return transport.Response{}, err
 	}
+	return c.fetchURL(ctx, requestURL)
+}
+
+// FetchURL renders an already constructed URL and returns the final DOM.
+func (c *Client) FetchURL(ctx context.Context, requestURL string) (transport.Response, error) {
+	if strings.TrimSpace(requestURL) == "" {
+		return transport.Response{}, fmt.Errorf("chromedp request URL is empty")
+	}
+	return c.fetchURL(ctx, requestURL)
+}
+
+func (c *Client) fetchURL(ctx context.Context, requestURL string) (transport.Response, error) {
 	select {
 	case c.semaphore <- struct{}{}:
 		defer func() { <-c.semaphore }()
@@ -116,6 +130,13 @@ func (c *Client) Fetch(ctx context.Context, request domain.SearchRequest) (trans
 		response.Elapsed = time.Since(started)
 		c.captureBestEffort(tabCtx, &response)
 		return response, fmt.Errorf("chromedp wait body: %w", err)
+	}
+	if c.config.PostLoadWait > 0 {
+		if err := chromedp.Run(tabCtx, chromedp.Sleep(c.config.PostLoadWait)); err != nil {
+			response.Elapsed = time.Since(started)
+			c.captureBestEffort(tabCtx, &response)
+			return response, fmt.Errorf("chromedp wait for rendered content: %w", err)
+		}
 	}
 	if err := c.captureDOM(tabCtx, &response); err != nil {
 		response.Elapsed = time.Since(started)

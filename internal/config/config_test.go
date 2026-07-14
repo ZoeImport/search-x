@@ -26,8 +26,11 @@ func TestLoadDefaults(t *testing.T) {
 	if got.BingURL != "https://www.bing.com/search" || got.BingTimeout != 10*time.Second || got.BingProfileDir != "./var/chrome-profile-bing" {
 		t.Fatalf("bing=%#v", got)
 	}
-	if !got.ReadEnabled || got.ReadHTTPTimeout != 6*time.Second {
+	if !got.ReadEnabled || !got.ReadBrowserEnabled || got.ReadHTTPTimeout != 6*time.Second || got.ReadBrowserTimeout != 12*time.Second {
 		t.Fatalf("read switches=%#v", got)
+	}
+	if got.ReadBrowserWait != 2*time.Second || got.ReadChromeProfileDir != "./var/chrome-profile-read" {
+		t.Fatalf("read browser=%#v", got)
 	}
 	if got.ReadFreshTTL != 30*time.Minute || got.ReadStaleTTL != 24*time.Hour || got.ReadMaxBodyBytes != 5<<20 || got.ReadMaxRedirects != 5 {
 		t.Fatalf("read limits=%#v", got)

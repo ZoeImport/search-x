@@ -100,8 +100,12 @@ const (
 	ImplementationNameChromedpReader ImplementationName = "chromedp_reader"
 	// ImplementationNameMIMETypeDetector identifies the MIME detector.
 	ImplementationNameMIMETypeDetector ImplementationName = "mime_type_detector"
-	// ImplementationNameHTMLExtractor identifies the Readability-backed HTML content extractor.
-	ImplementationNameHTMLExtractor ImplementationName = "readability"
+	// ImplementationNameHTMLExtractor identifies the HTML extraction strategy chain.
+	ImplementationNameHTMLExtractor ImplementationName = "html_extractor_chain"
+	// ImplementationNameReadabilityExtractor identifies the primary Readability strategy.
+	ImplementationNameReadabilityExtractor ImplementationName = "readability"
+	// ImplementationNameDOMArticleExtractor identifies the fallback article-DOM strategy.
+	ImplementationNameDOMArticleExtractor ImplementationName = "article_dom"
 	// ImplementationNamePlainTextExtractor identifies the plain-text extractor.
 	ImplementationNamePlainTextExtractor ImplementationName = "plain_text_extractor"
 	// ImplementationNameArticleQualityEvaluator identifies the article quality evaluator.
@@ -255,6 +259,8 @@ type ReadDocument struct {
 	Language string
 	// SourceType identifies the extracted source representation.
 	SourceType SourceType
+	// Extractor records the strategy that produced this canonical document.
+	Extractor ImplementationName
 	// ContentHTML contains sanitized canonical article HTML.
 	ContentHTML string
 	// ContentText contains normalized canonical plain text.

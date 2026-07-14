@@ -46,7 +46,7 @@ flowchart TD
 - Detector：区分正常页、空结果、验证码、429、封禁和 DOM 变化。
 - Parser：分别解析桌面页、移动页和浏览器 DOM。
 - DebugArtifactStore：保存完整 HTML、截图以及 SHA-256。
-- ReadService：执行 URL 安全策略、正文缓存、HTTP 读取、提取、质量判断和格式转换；保留可注入 Reader 接口供后续扩展。
+- ReadService：执行 URL 安全策略、正文缓存、HTTP 优先读取、Chromedp 按需渲染、提取、质量判断和格式转换；HTTPReader 与 BrowserReader 通过统一接口解耦。
 - Read Pipeline：`URLPolicy`、`ResourceReader`、`SourceTypeDetector`、`ContentExtractor`、`QualityEvaluator`、`ContentConverter`、`ReadCache` 均通过窄接口解耦。
 
 ## 本机运行
@@ -63,6 +63,8 @@ make
 ```
 
 `make run` 最终执行 `go run ./cmd/server`。如需直接使用底层命令：
+
+运行日志会同时显示在终端并追加写入 `log/server.log`。可通过 `LOG_FILE` 覆盖路径，例如 `make run LOG_FILE=log/debug.log`。
 
 ```bash
 go mod download
@@ -242,7 +244,9 @@ curl 'http://127.0.0.1:8080/v1/read' \
 }
 ```
 
-读取链路为 `SafeURLPolicy → HTTPReader → MIME Detector → Extractor → Quality → Converter`。第一版不启动浏览器读取目标正文：JS Shell、正文过短、401/403/429、验证码或登录页会返回明确错误，不会尝试绕过访问控制。`ResourceReader` 和 Service fallback 分支已通过接口解耦；后续 Browser Reader 必须先解决 DNS pinning、请求级 deadline 和资源上限后才能注册到生产 Bootstrap。
+读取链路为 `SafeURLPolicy → HTTPReader → MIME Detector → Extractor → Quality → Converter`。当 HTTP 返回 JS challenge、无法提取正文或质量判断为 JS shell 时，服务会按需执行一次 `BrowserReader → Detector → Extractor → Quality → Converter`。浏览器执行页面脚本并读取最终 DOM，不会自动填写验证码、登录账号或绕过付费墙；浏览器渲染仍没有正文时会返回明确错误。
+
+BrowserReader 使用独立 Profile、单请求 deadline、串行并发槽和 DOM 大小上限。当前实现面向本机 Demo：主 URL 和最终 URL 都经过 SafeURLPolicy，但浏览器加载的页面子资源尚未通过 HTTPReader 的 DNS pinning transport。部署到不可信公网前，应将浏览器 reader 放入无内网路由的隔离 worker/容器并配置 egress policy；也可以设置 `SEARCH_READ_BROWSER_ENABLED=false` 完全关闭它。
 
 SSRF 防护会拒绝私网、回环、link-local、CGNAT、Metadata、组播、非法协议和危险重定向。Demo 如需读取本机 fixture，只能通过 `SEARCH_READ_HOST_ALLOWLIST` 精确允许 Host；allowlist 仍不能开放 Metadata 或 link-local 地址。
 
@@ -311,7 +315,7 @@ SSRF 防护会拒绝私网、回环、link-local、CGNAT、Metadata、组播、�
 | 403 | `unsafe_url` | Read URL、DNS 结果或重定向目标不安全 |
 | 415 | `unsupported_content_type` | Read 第一阶段不支持 PDF、图片或 Office 文件 |
 | 413 | `content_too_large` | 解压后的资源超过读取硬上限 |
-| 422 | `extraction_failed` | HTTP 路径未提取到有效正文，或页面需要未启用的浏览器渲染 |
+| 422 | `extraction_failed` | HTTP 与浏览器路径都未提取到有效正文，或浏览器 fallback 被关闭 |
 | 502 | `fetch_failed` | Read DNS、TLS、连接或上游响应失败 |
 | 504 | `fetch_timeout` | Read 获取或渲染超时 |
 
@@ -365,6 +369,10 @@ SSRF 防护会拒绝私网、回环、link-local、CGNAT、Metadata、组播、�
 | `SEARCH_TRUSTED_PROXIES` | 空 | 逗号分隔的可信内网 CIDR |
 | `SEARCH_READ_ENABLED` | `true` | 是否注册 `POST /v1/read` |
 | `SEARCH_READ_HTTP_TIMEOUT` | `6s` | HTTP 正文读取超时 |
+| `SEARCH_READ_BROWSER_ENABLED` | `true` | 是否在符合条件时启用 Chromedp 正文 fallback |
+| `SEARCH_READ_BROWSER_TIMEOUT` | `12s` | 单次浏览器正文读取超时 |
+| `SEARCH_READ_BROWSER_WAIT` | `2s` | DOM ready 后等待页面脚本渲染的时间 |
+| `SEARCH_READ_CHROME_PROFILE_DIR` | `./var/chrome-profile-read` | 正文浏览器独立 Profile 目录 |
 | `SEARCH_READ_FRESH_TTL` | `30m` | 正文 fresh cache TTL |
 | `SEARCH_READ_STALE_TTL` | `24h` | 正文 stale cache 最大年龄 |
 | `SEARCH_READ_CACHE_MAX_ITEMS` | `500` | 正文内存缓存条目上限 |

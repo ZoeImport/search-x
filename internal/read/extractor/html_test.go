@@ -2,6 +2,8 @@ package extractor
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -82,4 +84,66 @@ func TestHTMLExtractorRemovesUnsafeLinkAndImageSchemes(t *testing.T) {
 	if !strings.Contains(document.ContentHTML, "https://example.com/image.png") {
 		t.Fatalf("safe URL removed: %s", document.ContentHTML)
 	}
+}
+
+func TestDOMArticleStrategyExtractsKnownArticleContainers(t *testing.T) {
+	body := []byte(`<html lang="zh"><head><title>腾讯云文章标题</title><meta name="author" content="测试作者"></head><body>
+		<div class="cdc-article-page"><div class="mod-article-content"><div class="mod-content"><div class="mod-content__markdown">
+		<h1>初识 Go 语言</h1>
+		<p>` + strings.Repeat("这是一段用于验证 DOM 正文 fallback 的有效中文内容。", 30) + `</p>
+		<p><a href="/developer/reference">参考资料</a></p>
+		</div></div></div></div><script>window.__NEXT_DATA__={}</script></body></html>`)
+
+	document, err := (DOMArticleStrategy{}).Extract(context.Background(), domain.Resource{
+		URL: "https://cloud.tencent.com/developer/article/2411607", FinalURL: "https://cloud.tencent.com/developer/article/2411607", Body: body,
+	})
+	if err != nil {
+		t.Fatalf("Extract() error = %v", err)
+	}
+	if document.Title != "初识 Go 语言" || !strings.Contains(document.ContentText, "DOM 正文 fallback") {
+		t.Fatalf("document = %#v", document)
+	}
+	if !strings.Contains(document.ContentHTML, `href="https://cloud.tencent.com/developer/reference"`) {
+		t.Fatalf("ContentHTML does not contain absolute link: %s", document.ContentHTML)
+	}
+}
+
+func TestHTMLExtractorUsesNextStrategyAfterPrimaryFailure(t *testing.T) {
+	extractor, err := NewHTMLExtractor(
+		stubHTMLStrategy{name: domain.ImplementationNameReadabilityExtractor, err: fmt.Errorf("readability returned no node")},
+		stubHTMLStrategy{name: domain.ImplementationNameDOMArticleExtractor, document: domain.ReadDocument{Title: "fallback", ContentText: "body"}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := extractor.Extract(context.Background(), domain.Resource{Body: []byte("html")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if document.Title != "fallback" || document.Extractor != domain.ImplementationNameDOMArticleExtractor {
+		t.Fatalf("document = %#v", document)
+	}
+}
+
+func TestHTMLExtractorClassifiesJavaScriptChallenge(t *testing.T) {
+	_, err := (HTMLExtractor{}).Extract(context.Background(), domain.Resource{
+		Body: []byte(`<html><body><script>window.solveChallenge('token'); document.cookie='EO-Bot-Js-Token=x'</script></body></html>`),
+	})
+	var coder interface {
+		ReadErrorCode() domain.ErrorCode
+	}
+	if !errors.As(err, &coder) || coder.ReadErrorCode() != domain.ErrCaptchaRequired {
+		t.Fatalf("error = %v, want captcha_required", err)
+	}
+}
+
+type stubHTMLStrategy struct {
+	name     domain.ImplementationName
+	document domain.ReadDocument
+	err      error
+}
+
+func (strategy stubHTMLStrategy) Name() domain.ImplementationName { return strategy.name }
+func (strategy stubHTMLStrategy) Extract(context.Context, domain.Resource) (domain.ReadDocument, error) {
+	return strategy.document, strategy.err
 }

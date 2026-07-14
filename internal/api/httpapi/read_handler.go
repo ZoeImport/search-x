@@ -3,6 +3,7 @@ package httpapi
 import (
 	"errors"
 	"net/http"
+	"net/url"
 
 	"github.com/gin-gonic/gin"
 
@@ -57,6 +58,7 @@ func (h *handler) read(c *gin.Context) {
 	defer cancel()
 	response, err := h.reader.Read(ctx, request)
 	if err != nil {
+		h.logReadFailure(c, payload.URL, err)
 		writeReadError(c, err, effectiveDebug)
 		return
 	}
@@ -70,6 +72,31 @@ func (h *handler) read(c *gin.Context) {
 		response.Debug = nil
 	}
 	c.JSON(http.StatusOK, response)
+}
+
+func (h *handler) logReadFailure(c *gin.Context, rawURL string, err error) {
+	code := domain.ErrFetchFailed
+	var readErr *domain.ReadError
+	if errors.As(err, &readErr) && readErr.Code != "" {
+		code = readErr.Code
+	}
+	h.options.Logger.Warn("read request failed",
+		"request_id", requestID(c),
+		"url", redactedReadURL(rawURL),
+		"code", code,
+		"error", err,
+	)
+}
+
+func redactedReadURL(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "<invalid-url>"
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
 }
 
 func writeReadError(c *gin.Context, err error, debug bool) {
