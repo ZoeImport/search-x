@@ -20,17 +20,26 @@ import (
 	"web-search-backend/internal/provider/baidu"
 	"web-search-backend/internal/provider/bing"
 	"web-search-backend/internal/provider/duckduckgo"
+	readcache "web-search-backend/internal/read/cache"
+	"web-search-backend/internal/read/converter"
+	"web-search-backend/internal/read/detector"
+	"web-search-backend/internal/read/extractor"
+	"web-search-backend/internal/read/quality"
+	readreader "web-search-backend/internal/read/reader"
+	"web-search-backend/internal/read/safeurl"
 	"web-search-backend/internal/resilience"
 	"web-search-backend/internal/transport"
 	"web-search-backend/internal/transport/chromebrowser"
 	"web-search-backend/internal/transport/httpsearch"
 )
 
+// App owns the HTTP router and its shared browser resources.
 type App struct {
 	Router *gin.Engine
 	close  func()
 }
 
+// New assembles the search and optional read pipelines.
 func New(config config.Config) (*App, error) {
 	artifactStore, err := debugartifact.New(config.DebugDir, config.DebugPreviewBytes)
 	if err != nil {
@@ -125,11 +134,50 @@ func New(config config.Config) (*App, error) {
 		return nil, err
 	}
 	searchService := app.NewSearchService(registry, memoryCache, time.Now)
+
+	var readService *app.ReadService
+	if config.ReadEnabled {
+		readPolicy := safeurl.NewPolicy(nil, safeurl.Config{AllowedHosts: config.ReadHostAllowlist})
+		httpReader, err := readreader.NewHTTPReader(readPolicy, readreader.Config{
+			Timeout: config.ReadHTTPTimeout, MaxBodyBytes: config.ReadMaxBodyBytes,
+			MaxRedirects: config.ReadMaxRedirects, UserAgent: config.UserAgent,
+		})
+		if err != nil {
+			closeBrowsers()
+			return nil, fmt.Errorf("create read HTTP reader: %w", err)
+		}
+		extractors, err := extractor.NewRegistry(extractor.HTMLExtractor{}, extractor.PlainTextExtractor{})
+		if err != nil {
+			closeBrowsers()
+			return nil, fmt.Errorf("create read extractor registry: %w", err)
+		}
+		converters, err := converter.NewRegistry(converter.MarkdownConverter{}, converter.TextConverter{})
+		if err != nil {
+			closeBrowsers()
+			return nil, fmt.Errorf("create read converter registry: %w", err)
+		}
+		readMemoryCache, err := readcache.NewMemory(config.ReadCacheMaxItems, config.ReadFreshTTL, config.ReadStaleTTL, time.Now)
+		if err != nil {
+			closeBrowsers()
+			return nil, fmt.Errorf("create read cache: %w", err)
+		}
+		readService, err = app.NewReadService(app.ReadServiceConfig{
+			Policy: readPolicy, HTTPReader: httpReader,
+			Detector: detector.NewMIMETypeDetector(), Extractors: extractors,
+			Evaluator: quality.NewArticleQualityEvaluator(200), Converters: converters,
+			Cache: readMemoryCache, OperationTimeout: config.TotalTimeout, Now: time.Now,
+		})
+		if err != nil {
+			closeBrowsers()
+			return nil, fmt.Errorf("create read service: %w", err)
+		}
+	}
 	if !config.Debug {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	router, err := httpapi.NewRouter(searchService, httpapi.Options{
-		Debug: config.Debug, DebugToken: config.DebugToken, TotalTimeout: config.TotalTimeout, ClientRate: config.ClientRate,
+		Reader: readService,
+		Debug:  config.Debug, DebugToken: config.DebugToken, TotalTimeout: config.TotalTimeout, ClientRate: config.ClientRate,
 		ClientBurst: config.ClientBurst, TrustedProxies: config.TrustedProxies,
 	})
 	if err != nil {
@@ -142,6 +190,7 @@ func New(config config.Config) (*App, error) {
 	}}, nil
 }
 
+// Close releases browser processes and idle HTTP connections.
 func (a *App) Close() {
 	if a != nil && a.close != nil {
 		a.close()

@@ -26,6 +26,15 @@ func TestLoadDefaults(t *testing.T) {
 	if got.BingURL != "https://www.bing.com/search" || got.BingTimeout != 10*time.Second || got.BingProfileDir != "./var/chrome-profile-bing" {
 		t.Fatalf("bing=%#v", got)
 	}
+	if !got.ReadEnabled || got.ReadHTTPTimeout != 6*time.Second {
+		t.Fatalf("read switches=%#v", got)
+	}
+	if got.ReadFreshTTL != 30*time.Minute || got.ReadStaleTTL != 24*time.Hour || got.ReadMaxBodyBytes != 5<<20 || got.ReadMaxRedirects != 5 {
+		t.Fatalf("read limits=%#v", got)
+	}
+	if got.ReadCacheMaxItems != 500 {
+		t.Fatalf("read runtime=%#v", got)
+	}
 }
 
 func TestLoadOverrides(t *testing.T) {
@@ -34,12 +43,16 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("SEARCH_ADDR", "127.0.0.1:9090")
 	t.Setenv("SEARCH_PROVIDER_RATE", "0.5")
 	t.Setenv("SEARCH_TRUSTED_PROXIES", "10.0.0.0/8,192.168.0.0/16")
+	t.Setenv("SEARCH_READ_HOST_ALLOWLIST", "demo.internal, docs.internal")
 	got, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Debug || got.DebugToken != "local-debug-token" || got.Address != "127.0.0.1:9090" || got.ProviderRate != 0.5 || len(got.TrustedProxies) != 2 {
 		t.Fatalf("config=%#v", got)
+	}
+	if len(got.ReadHostAllowlist) != 2 || got.ReadHostAllowlist[1] != "docs.internal" {
+		t.Fatalf("read config=%#v", got)
 	}
 }
 
@@ -48,6 +61,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"SEARCH_TOTAL_TIMEOUT", "bad", "SEARCH_TOTAL_TIMEOUT"},
 		{"SEARCH_PROVIDER_BURST", "0", "SEARCH_PROVIDER_BURST"},
 		{"SEARCH_DEBUG", "sometimes", "SEARCH_DEBUG"},
+		{"SEARCH_READ_MAX_REDIRECTS", "0", "SEARCH_READ_MAX_REDIRECTS"},
 	} {
 		t.Run(test.key, func(t *testing.T) {
 			for _, key := range knownEnvironmentVariables() {

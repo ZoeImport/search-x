@@ -79,7 +79,7 @@ func (s *SearchService) Search(ctx context.Context, request domain.SearchRequest
 			cacheValue := response
 			cacheValue.Debug = nil
 			if cacheErr := s.cache.Set(ctx, key, cacheValue); cacheErr != nil {
-				response.Warnings = append(response.Warnings, domain.Warning{Code: domain.WarningCodeCacheWriteError, Message: cacheErr.Error()})
+				response.Warnings = append(response.Warnings, domain.Warning{Code: domain.WarningCodeCacheWriteError, Message: "搜索结果缓存写入失败，本次仍返回实时结果"})
 			}
 			return response, nil
 		}
@@ -138,7 +138,7 @@ func (s *SearchService) prepareStale(response domain.SearchResponse, requestedPr
 	}
 	response.Warnings = append(response.Warnings, domain.Warning{
 		Code:    domain.WarningCodeLiveSearchUnavailable,
-		Message: fmt.Sprintf("实时 Provider 查询不可用，当前返回旧缓存: %v", providerErr),
+		Message: "实时 Provider 查询不可用，当前返回旧缓存",
 	})
 	var searchErr *domain.SearchError
 	if errors.As(providerErr, &searchErr) {

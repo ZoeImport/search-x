@@ -1,5 +1,7 @@
 # 正文读取 API 设计规范
 
+> **第一版范围更新（2026-07-14）：** 根据实现阶段的安全审查与用户“简单接口调用、优先完成后端”的最新要求，生产 Bootstrap 第一版只注册 `HTTPReader`。本文中的 Chromedp Reader 保留为后续设计：只有实现 policy-aware proxy/DNS pinning、请求级 deadline 和浏览器资源硬上限后才能启用。当前 JS Shell 或 HTTP 提取质量不足返回 `extraction_failed`，不会启动浏览器。
+
 ## 需求梳理
 
 ### 解决什么问题
@@ -9,8 +11,8 @@
 ### 第一阶段范围
 
 - 支持 `text/html` 和 `text/plain`。
-- 支持普通 HTTP 页面和需要 JavaScript 渲染的页面。
-- 使用 `HTTP -> Readability -> Chromedp fallback` 链路。
+- 支持可通过普通 HTTP 返回完整 HTML 的页面；JS Shell 第一版返回明确错误。
+- 使用 `HTTP -> Readability -> Markdown/Text` 链路。
 - 支持内存缓存、`refresh`、授权 `debug`、stale cache 降级和原始错误追踪。
 - 每次请求只读取一个 URL，不递归抓取站内链接。
 - PDF、Word、Excel、图片 OCR、批量读取和异步任务属于第二阶段。
@@ -37,7 +39,6 @@ flowchart TB
     Policy["SafeURLPolicy"]
     Cache["Read Cache"]
     HTTP["HTTP Fetcher"]
-    Browser["Chromedp Renderer"]
     Extractor["Readability Extractor"]
     Formatter["Markdown/Text Formatter"]
     Quality["Content Quality Evaluator"]
@@ -50,12 +51,10 @@ flowchart TB
   Service --> HTTP
   HTTP --> Extractor
   Extractor --> Quality
-  Quality -->|"质量不足且允许 fallback"| Browser
-  Browser --> Extractor
+
   Quality -->|"质量合格"| Formatter
   Formatter --> Handler
   HTTP --> External["公开网页"]
-  Browser --> External
 ```
 
 ### 主流程时序
@@ -69,14 +68,13 @@ sequenceDiagram
   participant K as Read Cache
   participant F as HTTP Fetcher
   participant E as Extractor
-  participant B as Chromedp Renderer
 
   C->>H: POST /v1/read
   H->>S: Read(ReadRequest)
   S->>P: ValidateAndResolve(url)
   alt URL 不安全
     P-->>S: unsafe_url
-    S-->>H: SearchError
+    S-->>H: ReadError
     H-->>C: 400/403 标准错误
   else URL 安全
     S->>K: GetFresh(cacheKey)
@@ -91,18 +89,14 @@ sequenceDiagram
       S->>E: Extract(body)
       alt 内容质量合格
         E-->>S: ReadDocument
-      else HTML 是 JS Shell
-        S->>B: Render(url)
-        loop 每个导航与子资源请求
-          B->>P: Validate request URL and IP
-        end
-        B-->>S: rendered HTML
-        S->>E: Extract(rendered HTML)
-        E-->>S: ReadDocument or extraction_failed
+        S->>K: Set(document without debug data)
+        S-->>H: live response
+        H-->>C: 200
+      else HTML 是 JS Shell 或正文不足
+        E-->>S: extraction_failed
+        S-->>H: ReadError
+        H-->>C: 422
       end
-      S->>K: Set(document without debug data)
-      S-->>H: live response
-      H-->>C: 200
     end
   end
 ```
@@ -190,7 +184,7 @@ X-Debug-Token: <仅 debug=true 时需要>
 | `captcha_required` | 503 | true | 页面明确要求安全验证 |
 | `extraction_failed` | 422 | false | HTTP 与浏览器均无法提取有效正文 |
 
-普通响应只返回稳定错误信息。授权 Debug 响应额外返回每次 HTTP/Browser Attempt、最终 URL、状态码、耗时、已脱敏 Header、正文预览哈希及 artifact 路径，保留最底层原始错误。
+普通响应只返回稳定错误信息。授权 Debug 响应额外返回每次 Read Pipeline Attempt、最终 URL、状态码、Content-Type、耗时和最底层原始错误。第一版不保存目标正文或 Read artifact。
 
 ### 内容获取和类型识别
 
@@ -206,7 +200,7 @@ HTTP Fetcher 使用独立 `http.Client` 和 Transport，不复用百度或 DuckD
 
 ### SSRF 防护
 
-`/v1/read` 接受调用方 URL，属于 SSRF 高风险入口。第一阶段必须同时保护 HTTP Fetcher 和 Chromedp Renderer：
+`/v1/read` 接受调用方 URL，属于 SSRF 高风险入口。第一阶段只注册 HTTP Fetcher；下列 Browser Renderer 约束属于后续阶段的启用前置条件：
 
 1. 只允许 `http`、`https`，禁止 URL userinfo、非规范端口和超长 Host。
 2. DNS 解析出的全部 IPv4/IPv6 地址都必须是公开地址；任意地址落入禁止网段则拒绝。
@@ -219,11 +213,11 @@ HTTP Fetcher 使用独立 `http.Client` 和 Transport，不复用百度或 DuckD
 
 ### HTML 正文提取
 
-首选 `github.com/go-shiori/go-readability`，它从 HTML 文档提取标题、作者、站点名、发布时间候选和主要内容。Readability 输出的正文 HTML 再交给 `github.com/JohannesKaufmann/html-to-markdown/v2` 转换为 Markdown；纯文本输出则从提取后的 DOM 生成段落文本。两个库都只处理已获取的内容，不自行访问 URL。
+使用 `codeberg.org/readeck/go-readability/v2` 从 HTML 文档提取标题、作者、站点名、发布时间候选和主要内容。原计划使用的 `github.com/go-shiori/go-readability` 已由上游标记弃用；前者是其官方继任实现。Readability 输出的正文 HTML 再交给 `github.com/JohannesKaufmann/html-to-markdown/v2` 转换为 Markdown；纯文本由 Readability 的 DOM renderer 生成。两个库都只处理已获取的内容，不自行访问 URL。
 
 提取前删除 `script`、`style`、`noscript`、导航、广告和明显交互控件。相对链接根据 `final_url` 转成绝对 URL。禁止把隐藏脚本、事件属性和表单凭据带入输出。
 
-相关依赖当前文档：[go-readability](https://pkg.go.dev/github.com/go-shiori/go-readability)、[html-to-markdown/v2](https://pkg.go.dev/github.com/JohannesKaufmann/html-to-markdown/v2)。
+相关依赖当前文档：[readeck/go-readability/v2](https://pkg.go.dev/codeberg.org/readeck/go-readability/v2)、[html-to-markdown/v2](https://pkg.go.dev/github.com/JohannesKaufmann/html-to-markdown/v2)。
 
 ### 内容质量和浏览器 fallback
 
@@ -234,7 +228,7 @@ HTTP 返回 200 不等于读取成功。提取结果满足以下全部最低条�
 - 正文不是登录、安全验证、错误提示或 Cookie Banner 的重复文本。
 - 链接文字占比不过高，且正文不是纯导航列表。
 
-只有 HTTP 已成功返回 HTML，但识别为 JavaScript Shell 或 Readability 结果过短时，才进入 Chromedp。HTTP 401、403、429、验证码和明确登录页不通过浏览器重试，避免把浏览器 fallback 当作访问控制绕过工具。
+第一阶段识别到 JavaScript Shell 或 Readability 结果过短时返回 `extraction_failed`。后续注册安全 Browser Reader 后，只有这两类质量结果可以进入渲染；HTTP 401、403、429、验证码和明确登录页始终不通过浏览器重试，避免把 fallback 当作访问控制绕过工具。
 
 Chromedp 规则：
 
@@ -426,7 +420,7 @@ const (
 	ImplementationNameChromedpReader ImplementationName = "chromedp_reader"
 
 	// ImplementationNameHTMLExtractor 表示 HTML Readability 提取实现。
-	ImplementationNameHTMLExtractor ImplementationName = "html_extractor"
+	ImplementationNameHTMLExtractor ImplementationName = "readability"
 
 	// ImplementationNamePlainTextExtractor 表示纯文本提取实现。
 	ImplementationNamePlainTextExtractor ImplementationName = "plain_text_extractor"
@@ -463,7 +457,7 @@ type ReadAttempt struct {
 | 操作 | 路径 | 主要职责 |
 |---|---|---|
 | 新增 | `internal/domain/read.go` | Read 请求、文档、响应、错误和 Attempt 模型 |
-| 新增 | `internal/app/read_service.go` | 缓存、HTTP、Browser fallback 和格式化编排 |
+| 新增 | `internal/app/read_service.go` | 缓存、HTTP、可选 Browser Reader 注入点和格式化编排 |
 | 新增 | `internal/api/httpapi/read_handler.go` | `POST /v1/read` 参数绑定与 JSON 响应 |
 | 新增 | `internal/read/safeurl/policy.go` | URL、DNS、IP、重定向和 allowlist 策略 |
 | 新增 | `internal/read/reader/reader.go` | `ResourceReader` 接口和共享 Resource 模型 |
@@ -490,8 +484,8 @@ type ReadAttempt struct {
 | 搜索与读取解耦 | Search 不隐式获取正文，客户端显式选择 URL 后调用 Read |
 | SSRF | HTTP 与浏览器所有导航、重定向和子资源统一经过 SafeURLPolicy |
 | 单套提取逻辑 | HTTP HTML 与渲染后 HTML 使用同一 Readability 和质量检查 |
-| Browser fallback | 仅用于 JS Shell 或正文不足，不用于绕过 401、403、验证码和登录 |
-| Debug 隔离 | 原始错误和 artifact 仅授权 Debug 返回，永不写入缓存 |
+| Browser fallback | 第一版不注册；后续仅用于 JS Shell 或正文不足，不用于绕过 401、403、验证码和登录 |
+| Debug 隔离 | 原始错误仅授权 Debug 返回，永不写入缓存；第一版不生成 Read artifact |
 | 实现可替换 | Reader、Detector、Extractor、Evaluator、Converter 和 Cache 通过窄接口注入 |
 | 类型化分支 | 格式、动作、阶段、实现名和错误分类使用自定义类型与类型化常量 |
 | Registry | SourceType 和 OutputFormat 映射由启动期 Registry 管理，不在 Service 堆积 switch |
@@ -499,40 +493,40 @@ type ReadAttempt struct {
 | 缓存降级 | 实时失败可返回 stale 正文，并明确 degraded 与 warning |
 | 资源边界 | 单 URL、总超时、响应上限、浏览器并发和重定向次数都有硬限制 |
 
-影响范围：新增 Read 领域和 API，不改变 `Provider` 接口，不改变 `GET /v1/search` 响应结构；复用现有 Gin Router、request ID、限流、Debug Token、debug artifact 和内存缓存模式。
+影响范围：新增 Read 领域和 API，不改变 `Provider` 接口，不改变 `GET /v1/search` 响应结构；复用现有 Gin Router、request ID、限流、Debug Token 授权和内存缓存模式。
 
 ## 发布策略
 
 - 默认只绑定现有服务监听地址，不额外开放端口。
 - 首次发布可用 `SEARCH_READ_ENABLED=false` 关闭路由；本机 Demo 验证后再默认开启。
-- 监控读取成功率、HTTP/Browser fallback 比例、各错误码、缓存命中率、正文长度、P50/P95 延迟和浏览器并发等待时间。
-- Browser fallback 错误率或资源占用异常时，可单独设置 `SEARCH_READ_BROWSER_ENABLED=false`，HTTP 与纯文本读取继续可用。
+- 第一版监控读取成功率、各错误码、缓存命中率、正文长度和 P50/P95 延迟；启用 Browser Reader 后再增加 fallback 比例与浏览器并发等待时间。
+- 第一版不注册 Browser Reader；后续实现只有通过逐请求 URL 策略、DNS pinning、资源上限和独立 deadline 验收后才允许启用。
 - 回滚只需关闭 Read 路由或回退提交，不影响 Search Provider Chain。
 
 ## Checklist
 
-- [ ] 定义 `ReadRequest`、`ReadDocument`、`ReadResponse` 和稳定错误码。
-- [ ] 按 G-01 定义 SourceType、OutputFormat、QualityAction、ReadStage 和 ReadClassification 类型化常量。
-- [ ] 定义 ResourceReader、SourceTypeDetector、ContentExtractor、QualityEvaluator、ContentConverter 和 ReadCache 窄接口。
-- [ ] 实现启动期只读 ExtractorRegistry 和 ConverterRegistry，拒绝重复注册。
-- [ ] 实现 SafeURLPolicy，覆盖 IPv4、IPv6、DNS rebinding、redirect 和 Browser 子资源。
-- [ ] 实现受限 HTTP Fetcher、Content-Type 检测、解压后大小限制和超时。
-- [ ] 集成 go-readability 和 html-to-markdown/v2。
-- [ ] 实现 HTML、纯文本格式化和 UTF-8 安全截断。
-- [ ] 实现内容质量检测与 JS Shell 判断。
+- [x] 定义 `ReadRequest`、`ReadDocument`、`ReadResponse` 和稳定错误码。
+- [x] 按 G-01 定义 SourceType、OutputFormat、QualityAction、ReadStage 和 ReadClassification 类型化常量。
+- [x] 定义 ResourceReader、SourceTypeDetector、ContentExtractor、QualityEvaluator、ContentConverter 和 ReadCache 窄接口。
+- [x] 实现启动期只读 ExtractorRegistry 和 ConverterRegistry，拒绝重复注册。
+- [x] 实现 SafeURLPolicy，覆盖 IPv4、IPv6、DNS rebinding 和 redirect；Browser 子资源策略留到 Browser Reader 阶段。
+- [x] 实现受限 HTTP Fetcher、Content-Type 检测、解压后大小限制和超时。
+- [x] 集成 readeck/go-readability/v2 和 html-to-markdown/v2。
+- [x] 实现 HTML、纯文本格式化和 UTF-8 安全截断。
+- [x] 实现内容质量检测与 JS Shell 判断。
 - [ ] 实现隔离 Chromedp Renderer 和 request interception。
-- [ ] 实现 Read Cache、refresh、stale fallback 和 singleflight。
-- [ ] 注册 `POST /v1/read` 并复用 Debug Token 授权。
-- [ ] 增加 SSRF、重定向、类型、大小、超时、提取、fallback、缓存和 Handler 测试。
-- [ ] 使用 Fake Reader、Extractor、Converter 和 Cache 验证各逻辑分支及 Attempt 顺序。
-- [ ] 增加静态 HTML、JS Shell、验证码、纯文本和异常编码 fixture。
-- [ ] 更新 README、配置表、错误码和本机 curl Demo。
+- [x] 实现 Read Cache、refresh、stale fallback 和 singleflight。
+- [x] 注册 `POST /v1/read` 并复用 Debug Token 授权。
+- [x] 增加 SSRF、重定向、类型、大小、超时、提取、fallback、缓存和 Handler 测试。
+- [x] 使用 Fake Reader、Extractor、Converter 和 Cache 验证各逻辑分支及 Attempt 顺序。
+- [x] 增加静态 HTML、JS Shell、验证码、纯文本和异常编码 fixture。
+- [x] 更新 README、配置表、错误码和本机 curl Demo。
 - [ ] 第二阶段独立设计 PDF 文本提取、扫描件 OCR、页码和文件安全边界。
 
 ## 验收标准
 
 - 普通 HTML 通过 HTTP 路径返回清洁 Markdown 或纯文本。
-- JavaScript Shell 在安全策略允许时进入 Chromedp 并返回渲染后正文。
+- JavaScript Shell 在第一版返回稳定的 `extraction_failed`；后续只有注册通过安全验收的 Browser Reader 后才进入渲染路径。
 - `text/plain` 不启动浏览器。
 - PDF 返回 `unsupported_content_type`，并明确属于第二阶段。
 - 内网、回环、Metadata、危险重定向和危险浏览器子资源全部被阻断。

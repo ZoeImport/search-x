@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Searchroom · 本地网页搜索</title>
+  <link rel="stylesheet" href="./app.css">
+</head>
+<body>
+  <div class="ambient ambient-one" aria-hidden="true"></div>
+  <div class="ambient ambient-two" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <a class="brand" href="#" aria-label="Searchroom 首页">
+      <span class="brand-mark">S</span>
+      <span>
+        <strong>Searchroom</strong>
+        <small>LOCAL SEARCH CONSOLE</small>
+      </span>
+    </a>
+    <div class="health" id="healthStatus">
+      <span class="health-dot"></span>
+      <span>等待连接</span>
+    </div>
+  </header>
+
+  <main class="shell">
+    <section class="hero" aria-labelledby="pageTitle">
+      <p class="eyebrow">Search · Inspect · Read</p>
+      <h1 id="pageTitle">从结果到正文，<br><em>保持每一步可见。</em></h1>
+      <p class="hero-copy">面向本地开发的搜索工作台。选择 Provider、检查 fallback 链路，再读取标准化正文。</p>
+    </section>
+
+    <section class="search-panel panel" aria-label="搜索参数">
+      <form id="searchForm">
+        <div class="search-line">
+          <label class="query-field">
+            <span class="sr-only">搜索关键词</span>
+            <span class="search-icon" aria-hidden="true"></span>
+            <input id="queryInput" name="q" type="search" maxlength="256" placeholder="搜索 Go、AI Agent 或任何网页…" autocomplete="off" required autofocus>
+          </label>
+          <button class="primary-button" id="searchButton" type="submit">
+            <span>开始搜索</span>
+            <span aria-hidden="true">↗</span>
+          </button>
+        </div>
+
+        <div class="parameter-grid">
+          <label class="field">
+            <span>API Base URL</span>
+            <input id="baseUrlInput" type="url" spellcheck="false" placeholder="http://127.0.0.1:8080">
+          </label>
+          <label class="field">
+            <span>Provider</span>
+            <select id="providerInput">
+              <option value="auto">Auto · fallback chain</option>
+              <option value="baidu">Baidu</option>
+              <option value="duckduckgo">DuckDuckGo</option>
+              <option value="bing">Bing</option>
+            </select>
+          </label>
+          <label class="field compact-field">
+            <span>Limit</span>
+            <input id="limitInput" type="number" min="1" max="20" value="10">
+          </label>
+          <label class="field compact-field">
+            <span>Page</span>
+            <input id="pageInput" type="number" min="1" max="10" value="1">
+          </label>
+          <div class="switches" aria-label="查询开关">
+            <label class="switch-row">
+              <input id="refreshInput" type="checkbox">
+              <span class="switch"></span>
+              <span>Refresh</span>
+            </label>
+            <label class="switch-row">
+              <input id="debugInput" type="checkbox">
+              <span class="switch"></span>
+              <span>Debug</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="token-row is-hidden" id="tokenRow">
+          <label class="field grow">
+            <span>Debug Token · 仅保存在本次浏览器会话</span>
+            <input id="tokenInput" type="password" autocomplete="off" placeholder="X-Debug-Token">
+          </label>
+        </div>
+      </form>
+    </section>
+
+    <div class="workspace">
+      <section class="results-column" aria-labelledby="resultsTitle">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Discovery</p>
+            <h2 id="resultsTitle">搜索结果</h2>
+          </div>
+          <div class="result-count" id="resultCount">尚未查询</div>
+        </div>
+
+        <div class="status-card empty-state" id="searchStatus">
+          <span class="status-index">01</span>
+          <div>
+            <strong>从一次真实查询开始</strong>
+            <p>结果、缓存状态和 Provider fallback 会显示在这里。</p>
+          </div>
+        </div>
+
+        <div class="meta-strip is-hidden" id="searchMeta" aria-label="查询元数据"></div>
+        <div class="notice-stack is-hidden" id="searchNotices"></div>
+        <div class="results-list" id="resultsList"></div>
+
+        <div class="pagination is-hidden" id="pagination">
+          <button class="ghost-button" id="previousPage" type="button">← 上一页</button>
+          <span id="pageLabel">第 1 页</span>
+          <button class="ghost-button" id="nextPage" type="button">下一页 →</button>
+        </div>
+
+        <details class="diagnostics is-hidden" id="searchDiagnostics">
+          <summary>搜索诊断信息 <span id="attemptCount"></span></summary>
+          <div id="diagnosticsBody"></div>
+        </details>
+        <details class="diagnostics is-hidden" id="searchJSONPanel">
+          <summary>完整搜索响应 JSON</summary>
+          <div class="json-toolbar">
+            <span>Response payload</span>
+            <button class="copy-button" id="copySearchJSON" type="button">复制 JSON</button>
+          </div>
+          <div class="json-tree" id="searchJSONTree"></div>
+        </details>
+      </section>
+
+      <aside class="reader-column panel" aria-labelledby="readerTitle">
+        <div class="reader-sticky">
+          <div class="section-heading reader-heading">
+            <div>
+              <p class="eyebrow">Reader</p>
+              <h2 id="readerTitle">正文读取</h2>
+            </div>
+            <span class="reader-state" id="readerState">待选择</span>
+          </div>
+
+          <div class="read-controls">
+            <label class="field">
+              <span>Format</span>
+              <select id="formatInput">
+                <option value="markdown">Markdown</option>
+                <option value="text">Plain text</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Max chars</span>
+              <input id="maxCharsInput" type="number" min="1000" max="100000" value="30000">
+            </label>
+            <label class="switch-row reader-switch">
+              <input id="readRefreshInput" type="checkbox">
+              <span class="switch"></span>
+              <span>Refresh</span>
+            </label>
+          </div>
+
+          <div class="reader-empty" id="readerEmpty">
+            <span class="reader-glyph">Aa</span>
+            <strong>选择一条搜索结果</strong>
+            <p>系统会调用 <code>POST /v1/read</code>，在这里展示正文、提取方式与原始错误。</p>
+          </div>
+
+          <div class="reader-content is-hidden" id="readerContent">
+            <div class="reader-title-block">
+              <p id="readerSite"></p>
+              <h3 id="articleTitle"></h3>
+              <a id="articleUrl" href="#" target="_blank" rel="noopener noreferrer">访问原网页 ↗</a>
+            </div>
+            <div class="meta-strip reader-meta" id="readerMeta"></div>
+            <div class="notice-stack is-hidden" id="readerNotices"></div>
+            <div class="reader-tabs" role="tablist" aria-label="正文视图">
+              <button class="reader-tab is-active" type="button" role="tab" aria-selected="true" data-reader-tab="preview">Preview</button>
+              <button class="reader-tab" type="button" role="tab" aria-selected="false" data-reader-tab="markdown">Markdown</button>
+              <button class="reader-tab" type="button" role="tab" aria-selected="false" data-reader-tab="json">JSON</button>
+              <button class="reader-tab" type="button" role="tab" aria-selected="false" data-reader-tab="debug">Debug</button>
+            </div>
+            <section class="reader-tab-panel markdown-preview" id="previewPanel" role="tabpanel"></section>
+            <section class="reader-tab-panel is-hidden" id="markdownPanel" role="tabpanel">
+              <div class="json-toolbar">
+                <span>Raw Markdown / Text</span>
+                <button class="copy-button" id="copyMarkdown" type="button">复制正文</button>
+              </div>
+              <pre id="articleBody" tabindex="0"></pre>
+            </section>
+            <section class="reader-tab-panel is-hidden" id="readerJSONPanel" role="tabpanel">
+              <div class="json-toolbar">
+                <span>Response payload</span>
+                <button class="copy-button" id="copyReaderJSON" type="button">复制 JSON</button>
+              </div>
+              <div class="json-tree" id="readerJSONTree"></div>
+            </section>
+            <section class="reader-tab-panel is-hidden" id="debugPanel" role="tabpanel">
+              <div class="diagnostics debug-tab-content" id="readerDiagnostics">
+                <div id="readerDiagnosticsBody"></div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </main>
+
+  <footer>
+    <span>Searchroom / local-only interface</span>
+    <span>API data is rendered as text</span>
+  </footer>
+
+  <script src="./app.js" defer></script>
+</body>
+</html>

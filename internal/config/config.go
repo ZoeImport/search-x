@@ -8,6 +8,7 @@ import (
 	"time"
 )
 
+// Config contains validated search, read, cache, and transport settings.
 type Config struct {
 	Address           string
 	Debug             bool
@@ -46,8 +47,25 @@ type Config struct {
 	CacheMaxItems  int
 	MaxBodyBytes   int64
 	TrustedProxies []string
+	// ReadEnabled controls registration of the read API.
+	ReadEnabled bool
+	// ReadHTTPTimeout limits the direct HTTP read stage.
+	ReadHTTPTimeout time.Duration
+	// ReadFreshTTL controls fresh read-document cache entries.
+	ReadFreshTTL time.Duration
+	// ReadStaleTTL controls stale read-document cache entries.
+	ReadStaleTTL time.Duration
+	// ReadCacheMaxItems bounds the read-document memory cache.
+	ReadCacheMaxItems int
+	// ReadMaxBodyBytes bounds decompressed resource bodies.
+	ReadMaxBodyBytes int64
+	// ReadMaxRedirects bounds HTTP redirect hops.
+	ReadMaxRedirects int
+	// ReadHostAllowlist permits named local hosts without disabling SSRF checks globally.
+	ReadHostAllowlist []string
 }
 
+// Load reads environment overrides and rejects invalid configuration.
 func Load() (Config, error) {
 	config := Config{
 		Address:           ":8080",
@@ -78,6 +96,13 @@ func Load() (Config, error) {
 		ClientBurst:       10,
 		CacheMaxItems:     1000,
 		MaxBodyBytes:      4 << 20,
+		ReadEnabled:       true,
+		ReadHTTPTimeout:   6 * time.Second,
+		ReadFreshTTL:      30 * time.Minute,
+		ReadStaleTTL:      24 * time.Hour,
+		ReadCacheMaxItems: 500,
+		ReadMaxBodyBytes:  5 << 20,
+		ReadMaxRedirects:  5,
 	}
 
 	stringValues := []struct {
@@ -109,6 +134,7 @@ func Load() (Config, error) {
 		{"SEARCH_DEBUG", &config.Debug},
 		{"SEARCH_CHROME_HEADLESS", &config.ChromeHeadless},
 		{"SEARCH_CHROME_NO_SANDBOX", &config.ChromeNoSandbox},
+		{"SEARCH_READ_ENABLED", &config.ReadEnabled},
 	} {
 		if err := parseBoolEnv(item.key, item.target); err != nil {
 			return Config{}, err
@@ -125,6 +151,9 @@ func Load() (Config, error) {
 		{"SEARCH_CHROME_TIMEOUT", &config.ChromeTimeout},
 		{"SEARCH_DUCKDUCKGO_TIMEOUT", &config.DuckDuckGoTimeout},
 		{"SEARCH_BING_TIMEOUT", &config.BingTimeout},
+		{"SEARCH_READ_HTTP_TIMEOUT", &config.ReadHTTPTimeout},
+		{"SEARCH_READ_FRESH_TTL", &config.ReadFreshTTL},
+		{"SEARCH_READ_STALE_TTL", &config.ReadStaleTTL},
 		{"SEARCH_FRESH_TTL", &config.FreshTTL},
 		{"SEARCH_STALE_TTL", &config.StaleTTL},
 		{"SEARCH_JITTER_MIN", &config.JitterMin},
@@ -155,6 +184,8 @@ func Load() (Config, error) {
 		{"SEARCH_CLIENT_BURST", &config.ClientBurst},
 		{"SEARCH_CACHE_MAX_ITEMS", &config.CacheMaxItems},
 		{"SEARCH_DEBUG_PREVIEW_BYTES", &config.DebugPreviewBytes},
+		{"SEARCH_READ_CACHE_MAX_ITEMS", &config.ReadCacheMaxItems},
+		{"SEARCH_READ_MAX_REDIRECTS", &config.ReadMaxRedirects},
 	} {
 		if err := parsePositiveIntEnv(item.key, item.target); err != nil {
 			return Config{}, err
@@ -167,6 +198,13 @@ func Load() (Config, error) {
 		}
 		config.MaxBodyBytes = parsed
 	}
+	if value := os.Getenv("SEARCH_READ_MAX_BODY_BYTES"); value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || parsed <= 0 {
+			return Config{}, fmt.Errorf("SEARCH_READ_MAX_BODY_BYTES must be a positive integer: %q", value)
+		}
+		config.ReadMaxBodyBytes = parsed
+	}
 	if value := os.Getenv("SEARCH_TRUSTED_PROXIES"); value != "" {
 		for _, proxy := range strings.Split(value, ",") {
 			if proxy = strings.TrimSpace(proxy); proxy != "" {
@@ -174,15 +212,25 @@ func Load() (Config, error) {
 			}
 		}
 	}
+	if value := os.Getenv("SEARCH_READ_HOST_ALLOWLIST"); value != "" {
+		for _, host := range strings.Split(value, ",") {
+			if host = strings.ToLower(strings.TrimSpace(host)); host != "" {
+				config.ReadHostAllowlist = append(config.ReadHostAllowlist, host)
+			}
+		}
+	}
 
 	if config.Address == "" || config.DebugDir == "" || config.ChromeProfileDir == "" || config.BingProfileDir == "" {
-		return Config{}, fmt.Errorf("SEARCH_ADDR, SEARCH_DEBUG_DIR, SEARCH_CHROME_PROFILE_DIR and SEARCH_BING_PROFILE_DIR must not be empty")
+		return Config{}, fmt.Errorf("search address, debug directory, and search browser profiles must not be empty")
 	}
 	if config.StaleTTL <= config.FreshTTL {
 		return Config{}, fmt.Errorf("SEARCH_STALE_TTL must be greater than SEARCH_FRESH_TTL")
 	}
 	if config.JitterMax < config.JitterMin {
 		return Config{}, fmt.Errorf("SEARCH_JITTER_MAX must be greater than or equal to SEARCH_JITTER_MIN")
+	}
+	if config.ReadStaleTTL <= config.ReadFreshTTL {
+		return Config{}, fmt.Errorf("SEARCH_READ_STALE_TTL must be greater than SEARCH_READ_FRESH_TTL")
 	}
 	return config, nil
 }
@@ -249,5 +297,8 @@ func knownEnvironmentVariables() []string {
 		"SEARCH_JITTER_MIN", "SEARCH_JITTER_MAX",
 		"SEARCH_CLIENT_RATE", "SEARCH_CLIENT_BURST", "SEARCH_CACHE_MAX_ITEMS", "SEARCH_MAX_BODY_BYTES",
 		"SEARCH_TRUSTED_PROXIES",
+		"SEARCH_READ_ENABLED", "SEARCH_READ_HTTP_TIMEOUT", "SEARCH_READ_FRESH_TTL", "SEARCH_READ_STALE_TTL",
+		"SEARCH_READ_CACHE_MAX_ITEMS", "SEARCH_READ_MAX_BODY_BYTES", "SEARCH_READ_MAX_REDIRECTS",
+		"SEARCH_READ_HOST_ALLOWLIST",
 	}
 }

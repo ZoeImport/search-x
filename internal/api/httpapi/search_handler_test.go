@@ -109,7 +109,7 @@ func TestSearchValidation(t *testing.T) {
 	router := testRouter(t, &fakeSearcher{}, true)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/search", nil))
-	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "invalid_request") || !strings.Contains(w.Body.String(), "original_error") {
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "invalid_request") || strings.Contains(w.Body.String(), "original_error") {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
 }
@@ -159,11 +159,30 @@ func TestSearchReturnsOriginalErrorAndAttempts(t *testing.T) {
 		}},
 		Artifacts: []string{"var/debug/req_1/desktop_http.html"},
 	}
-	router := testRouter(t, &fakeSearcher{err: upstream}, true)
+	router := testRouterWithOptions(t, &fakeSearcher{err: upstream}, Options{
+		Debug: true, DebugToken: "token", TotalTimeout: time.Second, ClientRate: 100, ClientBurst: 100,
+	})
 	w := httptest.NewRecorder()
-	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/search?q=golang", nil))
+	request := httptest.NewRequest(http.MethodGet, "/v1/search?q=golang&debug=true", nil)
+	request.Header.Set("X-Debug-Token", "token")
+	router.ServeHTTP(w, request)
 	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "status=200") || !strings.Contains(w.Body.String(), "desktop_http") {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestSearchServerDebugDoesNotBypassToken(t *testing.T) {
+	upstream := &domain.SearchError{
+		Code: domain.ErrProviderUnavailable, Message: "unavailable", Retryable: true,
+		Original: errors.New("secret upstream detail"), Attempts: []domain.Attempt{{OriginalError: "secret attempt"}},
+	}
+	router := testRouterWithOptions(t, &fakeSearcher{err: upstream}, Options{
+		Debug: true, DebugToken: "token", TotalTimeout: time.Second, ClientRate: 100, ClientBurst: 100,
+	})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/search?q=golang", nil))
+	if response.Code != http.StatusServiceUnavailable || strings.Contains(response.Body.String(), "secret") || strings.Contains(response.Body.String(), "original_error") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 

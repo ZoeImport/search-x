@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,6 +25,10 @@ func TestNewBuildsEndToEndOfflineSearchApp(t *testing.T) {
 	}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if request.URL.Path == "/article" {
+			_, _ = w.Write([]byte("<html lang='zh-CN'><title>Read Article</title><article><h1>Read Article</h1><p>" + strings.Repeat("正文内容用于验证安全读取与 Markdown 转换。", 20) + "</p></article></html>"))
+			return
+		}
 		if request.URL.Query().Get("q") != "" {
 			_, _ = w.Write(duckFixture)
 			return
@@ -42,6 +47,10 @@ func TestNewBuildsEndToEndOfflineSearchApp(t *testing.T) {
 		DuckDuckGoTimeout: time.Second, BingTimeout: time.Second,
 		FreshTTL: time.Minute, StaleTTL: time.Hour, ProviderRate: 1000, ProviderBurst: 100,
 		ClientRate: 1000, ClientBurst: 100, CacheMaxItems: 10, MaxBodyBytes: 1 << 20,
+		ReadEnabled: true, ReadHTTPTimeout: time.Second,
+		ReadFreshTTL: time.Minute, ReadStaleTTL: time.Hour, ReadCacheMaxItems: 10,
+		ReadMaxBodyBytes: 1 << 20, ReadMaxRedirects: 2,
+		ReadHostAllowlist: []string{"127.0.0.1"},
 	}
 	app, err := New(cfg)
 	if err != nil {
@@ -81,5 +90,20 @@ func TestNewBuildsEndToEndOfflineSearchApp(t *testing.T) {
 	app.Router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/search?q=golang&provider=other", nil))
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	readRequest := httptest.NewRequest(http.MethodPost, "/v1/read", strings.NewReader(`{"url":"`+upstream.URL+`/article","format":"markdown","max_chars":30000,"debug":false}`))
+	readRequest.Header.Set("Content-Type", "application/json")
+	app.Router.ServeHTTP(w, readRequest)
+	if w.Code != http.StatusOK {
+		t.Fatalf("read status=%d body=%s", w.Code, w.Body.String())
+	}
+	var readResponse domain.ReadResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &readResponse); err != nil {
+		t.Fatal(err)
+	}
+	if readResponse.Title != "Read Article" || readResponse.Meta.Transport != domain.ReadTransportHTTP || !strings.Contains(readResponse.Content, "正文内容") {
+		t.Fatalf("read response=%#v", readResponse)
 	}
 }

@@ -44,7 +44,7 @@ func (h *handler) search(c *gin.Context) {
 	if err := c.ShouldBindQuery(&query); err != nil {
 		writeError(c, &domain.SearchError{
 			Code: domain.ErrInvalidRequest, Message: "请求参数错误", Retryable: false, Original: err,
-		}, h.options.Debug)
+		}, false)
 		return
 	}
 	query.Q = strings.TrimSpace(query.Q)
@@ -57,7 +57,7 @@ func (h *handler) search(c *gin.Context) {
 	if query.Page == 0 {
 		query.Page = 1
 	}
-	effectiveDebug := h.options.Debug
+	effectiveDebug := false
 	if query.Debug != nil {
 		effectiveDebug = *query.Debug
 		if effectiveDebug {
@@ -142,8 +142,14 @@ func statusForCode(code domain.ErrorCode) int {
 	switch code {
 	case domain.ErrInvalidRequest:
 		return http.StatusBadRequest
-	case domain.ErrDebugUnauthorized:
+	case domain.ErrDebugUnauthorized, domain.ErrUnsafeURL:
 		return http.StatusForbidden
+	case domain.ErrUnsupportedContentType:
+		return http.StatusUnsupportedMediaType
+	case domain.ErrContentTooLarge:
+		return http.StatusRequestEntityTooLarge
+	case domain.ErrExtractionFailed:
+		return http.StatusUnprocessableEntity
 	case domain.ErrProviderNotFound:
 		return http.StatusNotFound
 	case domain.ErrRateLimited:
@@ -152,8 +158,10 @@ func statusForCode(code domain.ErrorCode) int {
 		return http.StatusBadGateway
 	case domain.ErrCaptchaRequired, domain.ErrProviderUnavailable:
 		return http.StatusServiceUnavailable
-	case domain.ErrUpstreamTimeout:
+	case domain.ErrUpstreamTimeout, domain.ErrFetchTimeout:
 		return http.StatusGatewayTimeout
+	case domain.ErrFetchFailed:
+		return http.StatusBadGateway
 	default:
 		return http.StatusInternalServerError
 	}

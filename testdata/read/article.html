@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <title>页面标题</title>
+  <meta name="author" content="测试作者">
+  <meta property="article:published_time" content="2026-07-14T08:00:00Z">
+</head>
+<body>
+  <nav>首页 产品 登录</nav>
+  <main>
+    <article>
+      <h1>一篇用于测试的文章</h1>
+      <p>这是第一段正文，其中包含足够明确的自然语言内容，用于验证正文提取器能够保留文章段落而移除导航栏和脚本。</p>
+      <p>这是第二段正文，包含一个<a href="/reference">参考链接</a>，用于验证相对链接会根据最终页面地址转换成绝对地址。</p>
+      <p>这是第三段正文。它让正文长度超过质量检查所需的最低阈值，也确保转换器可以稳定地产生多个清晰段落。</p>
+    </article>
+  </main>
+  <script>window.secret = "should-not-appear";</script>
+</body>
+</html>

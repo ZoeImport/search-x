@@ -2,7 +2,7 @@
 
 一个面向人类客户端和 AI Agent 的 Go + Gin 网页搜索 API。项目通过通用 `Provider` 接口注册 Baidu、DuckDuckGo、Bing 和自动 fallback Chain。
 
-当前实现不使用付费 SERP API，也不抓取搜索结果目标网页的正文。它直接读取公开搜索结果页，并通过跨 Provider fallback、Provider 内部 transport fallback、缓存、限流、抖动和熔断提供 best-effort 可用性。
+当前实现不使用付费 SERP API。搜索链路读取公开搜索结果页，并通过跨 Provider fallback、Provider 内部 transport fallback、缓存、限流、抖动和熔断提供 best-effort 可用性；独立的 Read API 可按需读取某条结果的 HTML/纯文本正文并转换为 Markdown 或 text。
 
 ## 架构
 
@@ -24,6 +24,11 @@ flowchart TD
     Chrome --> Detector
     Duck --> DuckHTTP["DuckDuckGo HTML HTTP"]
     Bing --> BingChrome["Bing Chromedp"]
+    Gin --> ReadService["ReadService"]
+    ReadService --> SafeURL["SafeURLPolicy"]
+    ReadService --> ReadHTTP["Bounded HTTP Reader"]
+    ReadService --> Extract["Extractor Registry"]
+    ReadService --> Convert["Converter Registry"]
     Service -->|实时失败| Stale["Stale Cache"]
     Baidu --> Artifacts["HTML / Screenshot Artifacts"]
     Bing --> Artifacts
@@ -41,6 +46,8 @@ flowchart TD
 - Detector：区分正常页、空结果、验证码、429、封禁和 DOM 变化。
 - Parser：分别解析桌面页、移动页和浏览器 DOM。
 - DebugArtifactStore：保存完整 HTML、截图以及 SHA-256。
+- ReadService：执行 URL 安全策略、正文缓存、HTTP 读取、提取、质量判断和格式转换；保留可注入 Reader 接口供后续扩展。
+- Read Pipeline：`URLPolicy`、`ResourceReader`、`SourceTypeDetector`、`ContentExtractor`、`QualityEvaluator`、`ContentConverter`、`ReadCache` 均通过窄接口解耦。
 
 ## 本机运行
 
@@ -78,6 +85,13 @@ curl --get 'http://127.0.0.1:8080/v1/search' \
 make smoke Q='golang'
 ```
 
+浏览器访问 [http://127.0.0.1:8080/ui/](http://127.0.0.1:8080/ui/) 可使用内嵌的 Searchroom：
+
+- 设置 query、Provider、limit、page、refresh、debug 和 Debug Token。
+- 查看每条结果的实际 Provider、fallback、缓存、warnings 和 attempts。
+- 点击结果调用 `/v1/read`，查看渲染后的 Markdown、原始 Markdown/text、可折叠 JSON Tree 和 Debug。
+- Debug Token 只保存在浏览器 `sessionStorage`，不会进入 URL。
+
 ## Docker 运行
 
 Docker Desktop 新版本通常使用 `docker compose`。当前这台 Mac 的 Colima 环境安装的是独立命令 `docker-compose`，两者使用同一个 `compose.yaml`；以下命令已在本机实测通过：
@@ -96,7 +110,7 @@ docker-compose up -d
 docker-compose ps
 ```
 
-容器使用非 root 用户运行。Chromium Profile 和调试文件分别持久化到 `chrome-profile`、`debug-artifacts` volume。
+容器使用非 root 用户运行。Baidu 与 Bing 使用独立 Chromium Profile；Profile 和调试文件分别持久化到独立 volume。
 
 停止服务：
 
@@ -104,7 +118,7 @@ docker-compose ps
 make docker-down
 ```
 
-如需同时删除 Demo 创建的两个 volume：
+如需同时清理 Demo 创建的所有 volume：
 
 ```bash
 docker-compose down --volumes
@@ -121,7 +135,7 @@ docker-compose down --volumes
 | `limit` | 否 | `10` | 1–20 |
 | `page` | 否 | `1` | 1–10 |
 | `refresh` | 否 | `false` | `true` 跳过 fresh cache，强制实时查询 |
-| `debug` | 否 | 服务配置 | `false` 返回干净响应；`true` 需要 Debug Token |
+| `debug` | 否 | `false` | `false` 或省略时返回干净响应；`true` 必须通过 Debug Token 鉴权 |
 
 成功响应：
 
@@ -134,7 +148,8 @@ docker-compose down --volumes
       "title": "The Go Programming Language",
       "url": "https://go.dev/",
       "snippet": "Go is an open source programming language...",
-      "rank": 1
+      "rank": 1,
+      "provider": "baidu"
     }
   ],
   "meta": {
@@ -155,7 +170,7 @@ docker-compose down --volumes
 }
 ```
 
-顶层 `provider` 是实际返回结果的搜索源；`requested_provider` 是调用方选择的值。`fallback_count` 表示单个 Provider 内部 transport fallback 次数，`provider_fallback_count` 表示跨 Provider fallback 次数。
+顶层 `provider` 是本次结果集的实际搜索源；每条 `results[].provider` 是该条内容的来源；`requested_provider` 是调用方选择的值。`fallback_count` 表示单个 Provider 内部 transport fallback 次数，`provider_fallback_count` 表示跨 Provider fallback 次数。
 
 `transport` 可能是 `desktop_http`、`mobile_http`、`chromedp`、`duckduckgo_http`、`bing_chromedp`、`fresh_cache` 或 `stale_cache`。
 
@@ -171,7 +186,7 @@ curl --get 'http://127.0.0.1:8080/v1/search' \
 
 ### 请求级 Debug
 
-非 Debug 模式的服务器可通过授权 token 临时采集当前请求的诊断信息：
+通过授权 token 临时采集当前请求的诊断信息：
 
 ```bash
 export SEARCH_DEBUG_TOKEN='replace-with-a-random-secret'
@@ -184,11 +199,58 @@ curl --get 'http://127.0.0.1:8080/v1/search' \
 
 `debug=true` 自动隐含 `refresh=true`，确保 attempts、headers、HTML preview 和 artifacts 来自本次实时请求。Token 只能放在 `X-Debug-Token` Header，不要放入 URL。Token 缺失、错误或服务端未配置时返回 HTTP 403 `debug_unauthorized`。
 
-`debug=false` 会覆盖 `SEARCH_DEBUG=true` 的开发默认值，只返回标准字段。授权 Debug 数据不会写入共享搜索缓存，后续普通请求不会读到上一次的诊断信息。
+`debug=false` 或省略 `debug` 始终只返回标准字段，即使服务运行在 Gin Debug 模式也不会绕过 Token。授权 Debug 数据不会写入共享搜索缓存，后续普通请求不会读到上一次的诊断信息。
 
-### 开发期原始错误
+### `POST /v1/read`
 
-Demo 默认 `SEARCH_DEBUG=true`。失败响应同时提供稳定错误码和原始上游信息：
+请求一个搜索结果 URL，返回经过清洗和长度限制的正文。第一阶段支持 `text/html`、`application/xhtml+xml` 和 `text/plain`；PDF 明确返回 `unsupported_content_type`，留到第二阶段。
+
+```bash
+curl 'http://127.0.0.1:8080/v1/read' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "url": "https://go.dev/doc/",
+    "format": "markdown",
+    "max_chars": 30000,
+    "refresh": false,
+    "debug": false
+  }'
+```
+
+`format` 支持 `markdown`、`text`；`max_chars` 范围为 1000–100000，按 Unicode 字符计数并优先在段落边界截断。`debug=true` 与搜索接口相同，需要 `X-Debug-Token` 并自动强制 refresh。
+
+```json
+{
+  "url": "https://go.dev/doc/",
+  "final_url": "https://go.dev/doc/",
+  "title": "Documentation",
+  "source_type": "html",
+  "content": "# Documentation\n\n...",
+  "content_format": "markdown",
+  "content_length": 12580,
+  "truncated": false,
+  "meta": {
+    "transport": "http",
+    "extractor": "readability",
+    "cached": false,
+    "degraded": false,
+    "fallback_count": 0,
+    "took_ms": 312,
+    "request_id": "req_01J..."
+  },
+  "warnings": []
+}
+```
+
+读取链路为 `SafeURLPolicy → HTTPReader → MIME Detector → Extractor → Quality → Converter`。第一版不启动浏览器读取目标正文：JS Shell、正文过短、401/403/429、验证码或登录页会返回明确错误，不会尝试绕过访问控制。`ResourceReader` 和 Service fallback 分支已通过接口解耦；后续 Browser Reader 必须先解决 DNS pinning、请求级 deadline 和资源上限后才能注册到生产 Bootstrap。
+
+SSRF 防护会拒绝私网、回环、link-local、CGNAT、Metadata、组播、非法协议和危险重定向。Demo 如需读取本机 fixture，只能通过 `SEARCH_READ_HOST_ALLOWLIST` 精确允许 Host；allowlist 仍不能开放 Metadata 或 link-local 地址。
+
+如果本机 Clash/Mihomo 使用 fake-IP，DNS 可能返回 `198.18.x.x`；该保留网段会被 Read API 拒绝。开发时应在当前实际生效的 Clash 配置中，将测试域名加入 `dns.fake-ip-filter` 并重载内核，使应用拿到真实 IP；不要在后端放行整个 `198.18.0.0/15`。搜索结果域名是动态的，若要测试任意站点，应使用独立的 real-IP DNS 开发配置，而不是逐条维护业务代码白名单。
+
+### 授权原始错误
+
+只有显式 `debug=true` 且 `X-Debug-Token` 正确时，失败响应才同时提供稳定错误码和原始上游信息：
 
 ```json
 {
@@ -232,7 +294,7 @@ Demo 默认 `SEARCH_DEBUG=true`。失败响应同时提供稳定错误码和原�
 
 以下信息不会进入 API 响应：`Cookie`、`Set-Cookie`、`Authorization`、`Proxy-Authorization` 和 Chrome Profile 身份数据。
 
-生产部署设置 `SEARCH_DEBUG=false` 后，API 不再返回 `original_error`、attempt 正文和本地 artifact 路径。
+普通请求永远不会返回 `original_error`、attempt 正文和本地 artifact 路径；`SEARCH_DEBUG` 只控制 Gin 运行模式，不构成 API Debug 授权。
 
 ## 错误码
 
@@ -246,6 +308,12 @@ Demo 默认 `SEARCH_DEBUG=true`。失败响应同时提供稳定错误码和原�
 | 503 | `captcha_required` | 百度要求安全验证且没有 stale cache |
 | 503 | `provider_unavailable` | 所有 Transport 不可用或处于熔断状态 |
 | 504 | `upstream_timeout` | 整体搜索链路超时 |
+| 403 | `unsafe_url` | Read URL、DNS 结果或重定向目标不安全 |
+| 415 | `unsupported_content_type` | Read 第一阶段不支持 PDF、图片或 Office 文件 |
+| 413 | `content_too_large` | 解压后的资源超过读取硬上限 |
+| 422 | `extraction_failed` | HTTP 路径未提取到有效正文，或页面需要未启用的浏览器渲染 |
+| 502 | `fetch_failed` | Read DNS、TLS、连接或上游响应失败 |
+| 504 | `fetch_timeout` | Read 获取或渲染超时 |
 
 正常零结果返回 HTTP 200 和 `results: []`。只有检测到正常搜索页根节点后，空数组才被视为真正的空结果。
 
@@ -269,7 +337,7 @@ Demo 默认 `SEARCH_DEBUG=true`。失败响应同时提供稳定错误码和原�
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `SEARCH_ADDR` | `:8080` | 监听地址 |
-| `SEARCH_DEBUG` | `true` | 返回原始错误并保存 artifact |
+| `SEARCH_DEBUG` | `true` | Gin 开发/发布运行模式；不绕过 Debug Token |
 | `SEARCH_DEBUG_TOKEN` | 空 | 请求级 `debug=true` 使用的 `X-Debug-Token`；空值拒绝请求级 Debug |
 | `SEARCH_DEBUG_DIR` | `./var/debug` | HTML/截图目录 |
 | `SEARCH_DEBUG_PREVIEW_BYTES` | `32768` | API 正文 preview 上限 |
@@ -295,6 +363,14 @@ Demo 默认 `SEARCH_DEBUG=true`。失败响应同时提供稳定错误码和原�
 | `SEARCH_CLIENT_RATE` | `5` | 每客户端 IP token/s |
 | `SEARCH_CLIENT_BURST` | `10` | 每客户端 IP burst |
 | `SEARCH_TRUSTED_PROXIES` | 空 | 逗号分隔的可信内网 CIDR |
+| `SEARCH_READ_ENABLED` | `true` | 是否注册 `POST /v1/read` |
+| `SEARCH_READ_HTTP_TIMEOUT` | `6s` | HTTP 正文读取超时 |
+| `SEARCH_READ_FRESH_TTL` | `30m` | 正文 fresh cache TTL |
+| `SEARCH_READ_STALE_TTL` | `24h` | 正文 stale cache 最大年龄 |
+| `SEARCH_READ_CACHE_MAX_ITEMS` | `500` | 正文内存缓存条目上限 |
+| `SEARCH_READ_MAX_BODY_BYTES` | `5242880` | 解压后正文资源硬上限 |
+| `SEARCH_READ_MAX_REDIRECTS` | `5` | 正文 HTTP 重定向上限 |
+| `SEARCH_READ_HOST_ALLOWLIST` | 空 | 允许读取私网/回环的精确 Host；只用于受控本机 Demo |
 
 所有非空配置都严格解析。值非法时服务拒绝启动，不会静默回退到默认值。
 
@@ -318,3 +394,5 @@ make check
 - 搜索引擎调整 DOM 后需要更新对应 Parser fixture 和 selector。
 - `auto` fallback 返回的是实际成功搜索源的排名；它不能冒充百度排名。
 - 免费、固定搜索源精确排名、无人值守高可用无法同时得到保证；本 Demo 对不可用情况返回明确、可诊断的结构化结果。
+- Read API 不破解验证码、登录、付费墙或访问控制，不携带调用方 Cookie/Authorization，不递归抓取链接。
+- 第一阶段不解析 PDF、Office、图片或 OCR，也不保证 Readability 能从任意网页提取出有效正文。
