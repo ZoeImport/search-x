@@ -30,9 +30,11 @@ type Config struct {
 	// BingURL is the Bing search endpoint used by the browser transport.
 	BingURL string
 	// BraveURL is the Brave search endpoint used by the browser transport.
-	BraveURL       string
-	UserAgent      string
-	TotalTimeout   time.Duration
+	BraveURL     string
+	UserAgent    string
+	TotalTimeout time.Duration
+	// ContentTimeout bounds one combined search and body-read request.
+	ContentTimeout time.Duration
 	DesktopTimeout time.Duration
 	MobileTimeout  time.Duration
 	ChromeTimeout  time.Duration
@@ -101,6 +103,7 @@ func Load() (Config, error) {
 		BraveURL:             "https://search.brave.com/search",
 		UserAgent:            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0 Safari/537.36",
 		TotalTimeout:         20 * time.Second,
+		ContentTimeout:       30 * time.Second,
 		DesktopTimeout:       4 * time.Second,
 		MobileTimeout:        4 * time.Second,
 		ChromeTimeout:        10 * time.Second,
@@ -177,6 +180,7 @@ func Load() (Config, error) {
 		target *time.Duration
 	}{
 		{"SEARCH_TOTAL_TIMEOUT", &config.TotalTimeout},
+		{"SEARCH_CONTENT_TIMEOUT", &config.ContentTimeout},
 		{"SEARCH_DESKTOP_TIMEOUT", &config.DesktopTimeout},
 		{"SEARCH_MOBILE_TIMEOUT", &config.MobileTimeout},
 		{"SEARCH_CHROME_TIMEOUT", &config.ChromeTimeout},
@@ -328,7 +332,7 @@ func knownEnvironmentVariables() []string {
 		"SEARCH_ADDR", "SEARCH_DEBUG", "SEARCH_DEBUG_TOKEN", "SEARCH_DEBUG_DIR", "SEARCH_DEBUG_PREVIEW_BYTES",
 		"SEARCH_CHROME_PROFILE_DIR", "SEARCH_CHROME_PATH", "SEARCH_CHROME_HEADLESS", "SEARCH_CHROME_NO_SANDBOX",
 		"SEARCH_BING_PROFILE_DIR", "SEARCH_BRAVE_PROFILE_DIR", "SEARCH_DESKTOP_URL", "SEARCH_MOBILE_URL", "SEARCH_DUCKDUCKGO_URL", "SEARCH_BING_URL", "SEARCH_BRAVE_URL", "SEARCH_USER_AGENT",
-		"SEARCH_TOTAL_TIMEOUT", "SEARCH_DESKTOP_TIMEOUT", "SEARCH_MOBILE_TIMEOUT", "SEARCH_CHROME_TIMEOUT", "SEARCH_DUCKDUCKGO_TIMEOUT", "SEARCH_BING_TIMEOUT", "SEARCH_BRAVE_TIMEOUT",
+		"SEARCH_TOTAL_TIMEOUT", "SEARCH_CONTENT_TIMEOUT", "SEARCH_DESKTOP_TIMEOUT", "SEARCH_MOBILE_TIMEOUT", "SEARCH_CHROME_TIMEOUT", "SEARCH_DUCKDUCKGO_TIMEOUT", "SEARCH_BING_TIMEOUT", "SEARCH_BRAVE_TIMEOUT",
 		"SEARCH_FRESH_TTL", "SEARCH_STALE_TTL", "SEARCH_PROVIDER_RATE", "SEARCH_PROVIDER_BURST",
 		"SEARCH_JITTER_MIN", "SEARCH_JITTER_MAX",
 		"SEARCH_CLIENT_RATE", "SEARCH_CLIENT_BURST", "SEARCH_CACHE_MAX_ITEMS", "SEARCH_MAX_BODY_BYTES",

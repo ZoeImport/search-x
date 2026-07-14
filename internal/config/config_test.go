@@ -32,6 +32,9 @@ func TestLoadDefaults(t *testing.T) {
 	if got.ProviderBrowserSlots != 2 || got.ReadBrowserSlots != 3 {
 		t.Fatalf("browser slots=%#v", got)
 	}
+	if got.ContentTimeout != 30*time.Second {
+		t.Fatalf("content timeout=%s", got.ContentTimeout)
+	}
 	if !got.ReadEnabled || !got.ReadBrowserEnabled || got.ReadHTTPTimeout != 6*time.Second || got.ReadBrowserTimeout != 12*time.Second {
 		t.Fatalf("read switches=%#v", got)
 	}
@@ -55,6 +58,7 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("SEARCH_READ_HOST_ALLOWLIST", "demo.internal, docs.internal")
 	t.Setenv("SEARCH_PROVIDER_BROWSER_SLOTS", "4")
 	t.Setenv("SEARCH_READ_BROWSER_SLOTS", "5")
+	t.Setenv("SEARCH_CONTENT_TIMEOUT", "45s")
 	got, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -67,6 +71,9 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if got.ProviderBrowserSlots != 4 || got.ReadBrowserSlots != 5 {
 		t.Fatalf("browser slots=%#v", got)
+	}
+	if got.ContentTimeout != 45*time.Second {
+		t.Fatalf("content timeout=%s", got.ContentTimeout)
 	}
 }
 

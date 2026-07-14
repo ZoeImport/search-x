@@ -25,22 +25,41 @@ type Reader interface {
 	Read(context.Context, domain.ReadRequest) (domain.ReadResponse, error)
 }
 
+// ContentSearcher executes one advanced search with readable-body orchestration.
+type ContentSearcher interface {
+	// Search executes one advanced search request.
+	Search(context.Context, domain.SearchContentRequest) (domain.SearchContentResponse, error)
+}
+
 // Options configures HTTP routing, diagnostics, rate limiting, and reading.
 type Options struct {
-	Reader         Reader
-	Debug          bool
-	DebugToken     string
-	TotalTimeout   time.Duration
-	ClientRate     float64
-	ClientBurst    int
+	// Reader enables the single-URL read endpoint.
+	Reader Reader
+	// ContentSearcher enables combined search and readable-body orchestration.
+	ContentSearcher ContentSearcher
+	// Debug records whether the server runs in development mode.
+	Debug bool
+	// DebugToken authorizes request-scoped raw diagnostics.
+	DebugToken string
+	// TotalTimeout bounds lightweight search and single-URL read handlers.
+	TotalTimeout time.Duration
+	// ContentTimeout bounds combined search and readable-body handlers.
+	ContentTimeout time.Duration
+	// ClientRate is the per-client request refill rate.
+	ClientRate float64
+	// ClientBurst is the per-client request burst capacity.
+	ClientBurst int
+	// TrustedProxies contains Gin-compatible trusted proxy networks.
 	TrustedProxies []string
-	Logger         *slog.Logger
+	// Logger receives request and failure diagnostics.
+	Logger *slog.Logger
 }
 
 type handler struct {
-	searcher Searcher
-	reader   Reader
-	options  Options
+	searcher        Searcher
+	reader          Reader
+	contentSearcher ContentSearcher
+	options         Options
 }
 
 // NewRouter creates the Gin engine and registers enabled API and UI routes.
@@ -50,6 +69,9 @@ func NewRouter(searcher Searcher, options Options) (*gin.Engine, error) {
 	}
 	if options.TotalTimeout <= 0 {
 		options.TotalTimeout = 20 * time.Second
+	}
+	if options.ContentTimeout <= 0 {
+		options.ContentTimeout = 30 * time.Second
 	}
 	if options.ClientRate <= 0 {
 		options.ClientRate = 5
@@ -65,7 +87,7 @@ func NewRouter(searcher Searcher, options Options) (*gin.Engine, error) {
 	if err := router.SetTrustedProxies(options.TrustedProxies); err != nil {
 		return nil, fmt.Errorf("set trusted proxies: %w", err)
 	}
-	h := &handler{searcher: searcher, reader: options.Reader, options: options}
+	h := &handler{searcher: searcher, reader: options.Reader, contentSearcher: options.ContentSearcher, options: options}
 	router.Use(
 		requestIDMiddleware(),
 		requestLogMiddleware(options.Logger),
@@ -86,6 +108,7 @@ func NewRouter(searcher Searcher, options Options) (*gin.Engine, error) {
 	})
 	router.StaticFS("/ui", http.FS(webui.Assets))
 	router.GET("/v1/search", h.search)
+	router.POST("/v1/search", h.searchPost)
 	if h.reader != nil {
 		router.POST("/v1/read", h.read)
 	}

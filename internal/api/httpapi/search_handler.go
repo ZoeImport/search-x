@@ -86,11 +86,16 @@ func (h *handler) search(c *gin.Context) {
 	if response.Query == "" {
 		response.Query = query.Q
 	}
+	response = prepareSearchHTTPResponse(response, domain.ProviderName(query.Provider), requestID(c), effectiveDebug)
+	c.JSON(http.StatusOK, response)
+}
+
+func prepareSearchHTTPResponse(response domain.SearchResponse, requestedProvider domain.ProviderName, requestIDValue string, debug bool) domain.SearchResponse {
 	if response.Provider == "" {
-		response.Provider = domain.ProviderName(query.Provider)
+		response.Provider = requestedProvider
 	}
 	if response.Meta.RequestID == "" {
-		response.Meta.RequestID = requestID(c)
+		response.Meta.RequestID = requestIDValue
 	}
 	if response.Results == nil {
 		response.Results = make([]domain.SearchResult, 0)
@@ -98,10 +103,10 @@ func (h *handler) search(c *gin.Context) {
 	if response.Warnings == nil {
 		response.Warnings = make([]domain.Warning, 0)
 	}
-	if !effectiveDebug {
+	if !debug {
 		response.Debug = nil
 	}
-	c.JSON(http.StatusOK, response)
+	return response
 }
 
 func validDebugToken(configured, presented string) bool {
@@ -149,6 +154,8 @@ func statusForCode(code domain.ErrorCode) int {
 	case domain.ErrContentTooLarge:
 		return http.StatusRequestEntityTooLarge
 	case domain.ErrExtractionFailed:
+		return http.StatusUnprocessableEntity
+	case domain.ErrInsufficientReadableResults:
 		return http.StatusUnprocessableEntity
 	case domain.ErrProviderNotFound:
 		return http.StatusNotFound
