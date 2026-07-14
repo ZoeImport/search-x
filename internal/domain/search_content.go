@@ -26,6 +26,11 @@ const (
 	SelectionReasonQuality SelectionReason = "highest_quality"
 )
 
+const (
+	// ImplementationNameUnicodeSearchQuality identifies the Unicode-aware search scorer.
+	ImplementationNameUnicodeSearchQuality ImplementationName = "unicode_search_quality_evaluator"
+)
+
 // ContentOptions configures optional content acquisition for a search request.
 type ContentOptions struct {
 	// Enabled turns a lightweight search into combined search and content reading.
