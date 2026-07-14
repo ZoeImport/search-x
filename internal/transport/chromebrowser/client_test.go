@@ -1,8 +1,11 @@
 package chromebrowser
 
 import (
+	"context"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -62,6 +65,73 @@ func TestNewUsesConfiguredTabCapacity(t *testing.T) {
 	defer client.Close()
 	if cap(client.semaphore) != 3 {
 		t.Fatalf("tab capacity = %d", cap(client.semaphore))
+	}
+}
+
+func TestConcurrentColdStartFailureDoesNotPanic(t *testing.T) {
+	client, err := New(Config{
+		ProfileDir:        t.TempDir(),
+		ExecPath:          "/bin/false",
+		Timeout:           time.Second,
+		Headless:          true,
+		MaxConcurrentTabs: 3,
+	}, testURLBuilder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	const requestCount = 3
+	var waitGroup sync.WaitGroup
+	errors := make(chan error, requestCount)
+	for index := 0; index < requestCount; index++ {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			_, fetchErr := client.FetchURL(context.Background(), "https://example.com")
+			errors <- fetchErr
+		}()
+	}
+	waitGroup.Wait()
+	close(errors)
+	for fetchErr := range errors {
+		if fetchErr == nil {
+			t.Fatal("expected browser startup failure")
+		}
+	}
+}
+
+func TestClientInitializesBrowserOnceConcurrently(t *testing.T) {
+	const callerCount = 8
+	var calls atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	client := &Client{
+		browserCtx: context.Background(),
+		browserInit: func(context.Context) error {
+			if calls.Add(1) == 1 {
+				close(started)
+			}
+			<-release
+			return nil
+		},
+	}
+
+	errors := make(chan error, callerCount)
+	for index := 0; index < callerCount; index++ {
+		go func() {
+			errors <- client.ensureBrowser()
+		}()
+	}
+	<-started
+	close(release)
+	for index := 0; index < callerCount; index++ {
+		if err := <-errors; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("browser initialization calls = %d", calls.Load())
 	}
 }
 

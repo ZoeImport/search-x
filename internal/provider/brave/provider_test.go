@@ -59,6 +59,22 @@ func TestProviderClassifiesCaptcha(t *testing.T) {
 	}
 }
 
+func TestProviderClassifiesScheduledCaptchaInNoScriptBody(t *testing.T) {
+	provider, err := New(braveTransportStub{response: transport.Response{
+		RequestURL: "https://search.brave.com/search?q=go", FinalURL: "https://search.brave.com/search?q=go",
+		StatusCode: 200,
+		Body:       []byte(`<noscript>Your request has been flagged as being suspicious and Brave Search decided to schedule a captcha for you.</noscript>`),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, gotErr := provider.Search(context.Background(), domain.SearchRequest{Query: "go", Limit: 10, Page: 1})
+	var searchErr *domain.SearchError
+	if !errors.As(gotErr, &searchErr) || searchErr.Code != domain.ErrCaptchaRequired {
+		t.Fatalf("error=%T %+v", gotErr, gotErr)
+	}
+}
+
 func TestProviderPreservesTransportError(t *testing.T) {
 	original := errors.New("chrome stopped")
 	provider, err := New(braveTransportStub{err: original})

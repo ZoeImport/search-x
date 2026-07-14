@@ -128,7 +128,8 @@ func isBraveCaptcha(finalURL string, body []byte) bool {
 	path := strings.ToLower(parsed.Path)
 	lowerBody := strings.ToLower(string(body))
 	return strings.Contains(path, "captcha") || strings.Contains(path, "challenge") ||
-		strings.Contains(lowerBody, "captcha-container") || strings.Contains(lowerBody, "verify you are human")
+		strings.Contains(lowerBody, "captcha-container") || strings.Contains(lowerBody, "verify you are human") ||
+		strings.Contains(lowerBody, "schedule a captcha") || strings.Contains(lowerBody, "flagged as being suspicious")
 }
 
 func newBraveSearchError(code domain.ErrorCode, original error, attempt domain.Attempt, artifacts []string) error {

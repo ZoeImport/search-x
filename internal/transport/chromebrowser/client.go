@@ -38,6 +38,9 @@ type Client struct {
 	allocatorStop context.CancelFunc
 	browserCtx    context.Context
 	browserStop   context.CancelFunc
+	browserInit   func(context.Context) error
+	browserInitMu sync.Mutex
+	browserReady  bool
 	semaphore     chan struct{}
 	closeOnce     sync.Once
 }
@@ -87,7 +90,10 @@ func New(config Config, urlBuilder URLBuilder) (*Client, error) {
 		allocatorStop: allocatorStop,
 		browserCtx:    browserCtx,
 		browserStop:   browserStop,
-		semaphore:     make(chan struct{}, config.MaxConcurrentTabs),
+		browserInit: func(ctx context.Context) error {
+			return chromedp.Run(ctx)
+		},
+		semaphore: make(chan struct{}, config.MaxConcurrentTabs),
 	}, nil
 }
 
@@ -112,43 +118,51 @@ func (c *Client) FetchURL(ctx context.Context, requestURL string) (transport.Res
 }
 
 func (c *Client) fetchURL(ctx context.Context, requestURL string) (transport.Response, error) {
+	response := transport.Response{RequestURL: requestURL}
 	select {
 	case c.semaphore <- struct{}{}:
 		defer func() { <-c.semaphore }()
 	case <-ctx.Done():
-		return transport.Response{RequestURL: requestURL}, fmt.Errorf("wait for chromedp slot: %w", ctx.Err())
+		return response, fmt.Errorf("wait for chromedp slot: %w", ctx.Err())
+	}
+	if err := ctx.Err(); err != nil {
+		return response, fmt.Errorf("start chromedp request: %w", err)
+	}
+	if err := c.ensureBrowser(); err != nil {
+		return response, fmt.Errorf("initialize chromedp browser: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, c.config.Timeout)
-	defer cancel()
 	tabCtx, tabCancel := chromedp.NewContext(c.browserCtx)
 	defer tabCancel()
+	operationCtx, operationCancel := context.WithTimeout(tabCtx, c.config.Timeout)
+	stopRequestCancellation := context.AfterFunc(ctx, operationCancel)
+	defer stopRequestCancellation()
+	defer operationCancel()
 	started := time.Now()
-	response := transport.Response{RequestURL: requestURL}
 
-	if err := chromedp.Run(tabCtx, network.Enable(), chromedp.Navigate(requestURL)); err != nil {
+	if err := chromedp.Run(operationCtx, network.Enable(), chromedp.Navigate(requestURL)); err != nil {
 		response.Elapsed = time.Since(started)
-		c.captureBestEffort(tabCtx, &response)
+		c.captureBestEffort(operationCtx, &response)
 		return response, fmt.Errorf("chromedp navigate: %w", err)
 	}
-	if err := chromedp.Run(tabCtx, chromedp.WaitReady("body", chromedp.ByQuery)); err != nil {
+	if err := chromedp.Run(operationCtx, chromedp.WaitReady("body", chromedp.ByQuery)); err != nil {
 		response.Elapsed = time.Since(started)
-		c.captureBestEffort(tabCtx, &response)
+		c.captureBestEffort(operationCtx, &response)
 		return response, fmt.Errorf("chromedp wait body: %w", err)
 	}
 	if c.config.PostLoadWait > 0 {
-		if err := chromedp.Run(tabCtx, chromedp.Sleep(c.config.PostLoadWait)); err != nil {
+		if err := chromedp.Run(operationCtx, chromedp.Sleep(c.config.PostLoadWait)); err != nil {
 			response.Elapsed = time.Since(started)
-			c.captureBestEffort(tabCtx, &response)
+			c.captureBestEffort(operationCtx, &response)
 			return response, fmt.Errorf("chromedp wait for rendered content: %w", err)
 		}
 	}
-	if err := c.captureDOM(tabCtx, &response); err != nil {
+	if err := c.captureDOM(operationCtx, &response); err != nil {
 		response.Elapsed = time.Since(started)
-		c.captureScreenshot(tabCtx, &response)
+		c.captureScreenshot(operationCtx, &response)
 		return response, err
 	}
-	c.captureScreenshot(tabCtx, &response)
+	c.captureScreenshot(operationCtx, &response)
 	response.StatusCode = 200
 	response.Elapsed = time.Since(started)
 	if len(response.Body) > c.config.MaxBodyBytes {
@@ -156,6 +170,22 @@ func (c *Client) fetchURL(ctx context.Context, requestURL string) (transport.Res
 		return response, fmt.Errorf("chromedp response body exceeds %d bytes", c.config.MaxBodyBytes)
 	}
 	return response, nil
+}
+
+func (c *Client) ensureBrowser() error {
+	c.browserInitMu.Lock()
+	defer c.browserInitMu.Unlock()
+	if c.browserReady {
+		return nil
+	}
+	if c.browserInit == nil {
+		return fmt.Errorf("chromedp browser initializer is nil")
+	}
+	if err := c.browserInit(c.browserCtx); err != nil {
+		return err
+	}
+	c.browserReady = true
+	return nil
 }
 
 func (c *Client) captureBestEffort(ctx context.Context, response *transport.Response) {
