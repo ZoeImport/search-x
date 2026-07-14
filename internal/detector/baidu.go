@@ -1,8 +1,11 @@
 package detector
 
 import (
+	"bytes"
 	"net/url"
 	"strings"
+
+	"golang.org/x/net/html"
 
 	"web-search-backend/internal/domain"
 )
@@ -30,7 +33,7 @@ const (
 )
 
 // Classify identifies the outcome represented by a Baidu HTTP response.
-func Classify(status int, finalURL string, body []byte) Classification {
+func Classify(status int, finalURL, pageTitle string, body []byte) Classification {
 	if status == 429 {
 		return RateLimited
 	}
@@ -39,16 +42,38 @@ func Classify(status int, finalURL string, body []byte) Classification {
 	}
 
 	lowerBody := strings.ToLower(string(body))
-	if captchaURL(finalURL) || captchaBody(lowerBody) {
+	if pageTitle == "" {
+		pageTitle = ExtractTitle(body)
+	}
+	if captchaURL(finalURL) || strings.Contains(pageTitle, "百度安全验证") || captchaBody(lowerBody) {
 		return Captcha
 	}
 	if status >= 400 {
 		return Blocked
 	}
-	if hasNormalRoot(lowerBody) {
+	if hasNormalRoot(lowerBody) && hasResultCard(lowerBody) {
 		return Normal
 	}
+	if hasNormalRoot(lowerBody) && hasEmptyMarker(lowerBody) {
+		return Empty
+	}
 	return ParseChanged
+}
+
+// ExtractTitle returns the normalized text of the first HTML title element.
+func ExtractTitle(body []byte) string {
+	tokenizer := html.NewTokenizer(bytes.NewReader(body))
+	for {
+		switch tokenizer.Next() {
+		case html.ErrorToken:
+			return ""
+		case html.StartTagToken:
+			token := tokenizer.Token()
+			if strings.EqualFold(token.Data, "title") && tokenizer.Next() == html.TextToken {
+				return strings.Join(strings.Fields(tokenizer.Token().Data), " ")
+			}
+		}
+	}
 }
 
 func captchaURL(raw string) bool {
@@ -64,10 +89,9 @@ func captchaURL(raw string) bool {
 
 func captchaBody(body string) bool {
 	strongForm := strings.Contains(body, "id=\"verify-form\"") ||
-		strings.Contains(body, "id='verify-form'") ||
-		strings.Contains(body, "class=\"captcha")
+		strings.Contains(body, "id='verify-form'")
 	challengeText := strings.Contains(body, "请输入验证码") ||
-		strings.Contains(body, "安全验证") ||
+		strings.Contains(body, "百度安全验证") ||
 		strings.Contains(body, "security verification")
 	return strongForm || (challengeText && strings.Contains(body, "<form"))
 }
@@ -77,4 +101,20 @@ func hasNormalRoot(body string) bool {
 		strings.Contains(body, "id='content_left'") ||
 		strings.Contains(body, "id=\"results\"") ||
 		strings.Contains(body, "id='results'")
+}
+
+func hasResultCard(body string) bool {
+	return strings.Contains(body, "class=\"result") ||
+		strings.Contains(body, "class='result") ||
+		strings.Contains(body, "class=\"c-container") ||
+		strings.Contains(body, "class='c-container") ||
+		strings.Contains(body, "data-rank=") ||
+		strings.Contains(body, "data-log=")
+}
+
+func hasEmptyMarker(body string) bool {
+	return strings.Contains(body, "class=\"nors") ||
+		strings.Contains(body, "class='nors") ||
+		strings.Contains(body, "没有找到相关结果") ||
+		strings.Contains(body, "未找到相关结果")
 }

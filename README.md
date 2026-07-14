@@ -315,9 +315,14 @@ SSRF 防护会拒绝私网、回环、link-local、CGNAT、Metadata、组播、�
   "debug": {
     "attempts": [
       {
-        "transport": "desktop_http",
+        "strategy": "fixed_session",
+        "transport": "baidu_session_http",
+        "header_profile": "baidu_fixed_session",
         "http_status": 200,
         "classification": "captcha",
+        "session_state": "cooling",
+        "session_generation": 1,
+        "blocked_until": "2026-07-14T16:30:00+08:00",
         "original_error": "baidu response classified as captcha: status=200 final_url=...",
         "body_preview": "<!doctype html>...",
         "body_sha256": "..."
@@ -333,7 +338,8 @@ SSRF 防护会拒绝私网、回环、link-local、CGNAT、Metadata、组播、�
 
 每个 fallback attempt 都保留：
 
-- Transport 名称、请求 URL、最终 URL和耗时。
+- Strategy、Transport、Header Profile、请求 URL、最终 URL、页面标题和耗时。
+- 固定 Session 的 state、generation、等待时间和 `blocked_until`。
 - HTTP status、分类结果和 Parser error。
 - 原始 Go error。
 - 已脱敏的响应头。
@@ -371,9 +377,10 @@ SSRF 防护会拒绝私网、回环、link-local、CGNAT、Metadata、组播、�
 - Fresh cache：15 分钟。
 - Stale cache：24 小时。
 - 相同查询使用 `singleflight` 合并并发请求。
-- BaiduProvider 默认每秒 1 次，burst 3。
-- 每次上游访问增加 200–800 ms jitter。
-- 所有搜索 transport 使用同一个 Header Profile Pool；同一 `request_id` sticky，同一请求内不随机漂移。
+- BaiduProvider 首先使用固定 Session 策略：专用 `baidu_fixed_session` Header Profile、独立 CookieJar、首页 bootstrap、串行请求，响应结束后等待 3–5 秒；第一页不发送 `rn/pn` 参数。
+- 固定 Session 的 network、timeout、parse changed 会进入 Header Profile Pool 备选策略；CAPTCHA、429、403、503 直接交给跨 Provider fallback，不继续请求百度。
+- Header Profile Pool 备选策略保留每秒 1 次、burst 3 和 200–800 ms jitter；同一 `request_id` sticky。
+- DuckDuckGo、Bing、Brave、百度 Header Pool 和正文浏览器继续使用 Header Profile Pool；百度固定 Session 在创建时绑定 Primary profile，生命周期内不轮换。
 - 每个 profile 同时约束 `User-Agent`、`Accept-Language`、UA Client Hints、`navigator.platform` 和 viewport，避免只改 UA 造成字段冲突。
 - Profile Pool 不是验证码绕过器；上游已返回 CAPTCHA 时仍返回 `captcha_required`，由 `auto` 执行跨 Provider fallback。
 - CAPTCHA 对相应 Transport 熔断 30 分钟。
@@ -417,6 +424,11 @@ SSRF 防护会拒绝私网、回环、link-local、CGNAT、Metadata、组播、�
 | `SEARCH_PROVIDER_BURST` | `3` | Provider burst |
 | `SEARCH_JITTER_MIN` | `200ms` | 上游请求最小 jitter |
 | `SEARCH_JITTER_MAX` | `800ms` | 上游请求最大 jitter |
+| `SEARCH_BAIDU_SESSION_MIN_INTERVAL` | `3s` | 固定百度 Session 在上次响应结束后的最小空闲时间 |
+| `SEARCH_BAIDU_SESSION_JITTER_MAX` | `2s` | 固定百度 Session 追加的最大随机等待 |
+| `SEARCH_BAIDU_CAPTCHA_COOLDOWN` | `30m` | 百度 CAPTCHA 后固定 Session 冷却时间 |
+| `SEARCH_BAIDU_RATE_LIMIT_COOLDOWN` | `5m` | 百度 429、403、503 后固定 Session 冷却时间 |
+| `SEARCH_BAIDU_FALLBACK_RESERVE` | `5s` | 固定 Session 等待时为当前请求和后续 fallback 保留的预算 |
 | `SEARCH_CLIENT_RATE` | `5` | 每客户端 IP token/s |
 | `SEARCH_CLIENT_BURST` | `10` | 每客户端 IP burst |
 | `SEARCH_TRUSTED_PROXIES` | 空 | 逗号分隔的可信内网 CIDR |

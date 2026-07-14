@@ -22,6 +22,11 @@ services:
       SEARCH_CONTENT_TIMEOUT: "30s"
       SEARCH_JITTER_MIN: "200ms"
       SEARCH_JITTER_MAX: "800ms"
+      SEARCH_BAIDU_SESSION_MIN_INTERVAL: "3s"
+      SEARCH_BAIDU_SESSION_JITTER_MAX: "2s"
+      SEARCH_BAIDU_CAPTCHA_COOLDOWN: "30m"
+      SEARCH_BAIDU_RATE_LIMIT_COOLDOWN: "5m"
+      SEARCH_BAIDU_FALLBACK_RESERVE: "5s"
     volumes:
       - chrome-profile:/data/chrome-profile
       - bing-profile:/data/bing-profile

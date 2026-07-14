@@ -16,8 +16,13 @@ func BuildSearchURL(baseURL string, request domain.SearchRequest) (string, error
 	}
 	values := parsed.Query()
 	values.Set("wd", request.Query)
-	values.Set("rn", strconv.Itoa(request.Limit))
-	values.Set("pn", strconv.Itoa((request.Page-1)*request.Limit))
+	if request.Page > 1 {
+		values.Set("rn", strconv.Itoa(request.Limit))
+		values.Set("pn", strconv.Itoa((request.Page-1)*request.Limit))
+	} else {
+		values.Del("rn")
+		values.Del("pn")
+	}
 	values.Set("ie", "utf-8")
 	parsed.RawQuery = values.Encode()
 	return parsed.String(), nil

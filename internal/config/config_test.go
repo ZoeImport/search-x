@@ -20,6 +20,10 @@ func TestLoadDefaults(t *testing.T) {
 	if got.ProviderRate != 1 || got.ProviderBurst != 3 || got.ClientRate != 5 || got.ClientBurst != 10 {
 		t.Fatalf("rates=%#v", got)
 	}
+	if got.BaiduSessionMinInterval != 3*time.Second || got.BaiduSessionMaxJitter != 2*time.Second ||
+		got.BaiduCaptchaCooldown != 30*time.Minute || got.BaiduRateLimitCooldown != 5*time.Minute || got.BaiduFallbackReserve != 5*time.Second {
+		t.Fatalf("Baidu session=%#v", got)
+	}
 	if got.DuckDuckGoURL != "https://html.duckduckgo.com/html/" || got.DuckDuckGoTimeout != 5*time.Second {
 		t.Fatalf("duckduckgo=%#v", got)
 	}
@@ -54,6 +58,9 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("SEARCH_DEBUG_TOKEN", "local-debug-token")
 	t.Setenv("SEARCH_ADDR", "127.0.0.1:9090")
 	t.Setenv("SEARCH_PROVIDER_RATE", "0.5")
+	t.Setenv("SEARCH_BAIDU_SESSION_MIN_INTERVAL", "4s")
+	t.Setenv("SEARCH_BAIDU_SESSION_JITTER_MAX", "0s")
+	t.Setenv("SEARCH_BAIDU_FALLBACK_RESERVE", "0s")
 	t.Setenv("SEARCH_TRUSTED_PROXIES", "10.0.0.0/8,192.168.0.0/16")
 	t.Setenv("SEARCH_READ_HOST_ALLOWLIST", "demo.internal, docs.internal")
 	t.Setenv("SEARCH_PROVIDER_BROWSER_SLOTS", "4")
@@ -65,6 +72,9 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if got.Debug || got.DebugToken != "local-debug-token" || got.Address != "127.0.0.1:9090" || got.ProviderRate != 0.5 || len(got.TrustedProxies) != 2 {
 		t.Fatalf("config=%#v", got)
+	}
+	if got.BaiduSessionMinInterval != 4*time.Second || got.BaiduSessionMaxJitter != 0 || got.BaiduFallbackReserve != 0 {
+		t.Fatalf("Baidu overrides=%#v", got)
 	}
 	if len(got.ReadHostAllowlist) != 2 || got.ReadHostAllowlist[1] != "docs.internal" {
 		t.Fatalf("read config=%#v", got)
@@ -81,6 +91,8 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 	for _, test := range []struct{ key, value, want string }{
 		{"SEARCH_TOTAL_TIMEOUT", "bad", "SEARCH_TOTAL_TIMEOUT"},
 		{"SEARCH_PROVIDER_BURST", "0", "SEARCH_PROVIDER_BURST"},
+		{"SEARCH_BAIDU_SESSION_MIN_INTERVAL", "0s", "SEARCH_BAIDU_SESSION_MIN_INTERVAL"},
+		{"SEARCH_BAIDU_SESSION_JITTER_MAX", "-1s", "SEARCH_BAIDU_SESSION_JITTER_MAX"},
 		{"SEARCH_DEBUG", "sometimes", "SEARCH_DEBUG"},
 		{"SEARCH_READ_MAX_REDIRECTS", "0", "SEARCH_READ_MAX_REDIRECTS"},
 		{"SEARCH_PROVIDER_BROWSER_SLOTS", "0", "SEARCH_PROVIDER_BROWSER_SLOTS"},

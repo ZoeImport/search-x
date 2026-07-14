@@ -24,6 +24,8 @@ type TransportName string
 const (
 	// TransportNameDesktopHTTP identifies Baidu desktop HTTP.
 	TransportNameDesktopHTTP TransportName = "desktop_http"
+	// TransportNameBaiduSessionHTTP identifies the fixed Cookie session Baidu HTTP strategy.
+	TransportNameBaiduSessionHTTP TransportName = "baidu_session_http"
 	// TransportNameMobileHTTP identifies Baidu mobile HTTP.
 	TransportNameMobileHTTP TransportName = "mobile_http"
 	// TransportNameChromedp identifies the Baidu Chromedp transport.
@@ -38,6 +40,28 @@ const (
 	TransportNameFreshCache TransportName = "fresh_cache"
 	// TransportNameStaleCache identifies a stale cache response.
 	TransportNameStaleCache TransportName = "stale_cache"
+)
+
+// BaiduStrategyName identifies one independently selectable Baidu request strategy.
+type BaiduStrategyName string
+
+var (
+	// BaiduStrategyNameFixedSession uses one fixed header identity and Cookie session.
+	BaiduStrategyNameFixedSession BaiduStrategyName = "fixed_session"
+	// BaiduStrategyNameHeaderPool uses the existing sticky Header Profile Pool transports.
+	BaiduStrategyNameHeaderPool BaiduStrategyName = "header_pool"
+)
+
+// BaiduSessionState identifies the lifecycle state of the fixed Baidu Cookie session.
+type BaiduSessionState string
+
+var (
+	// BaiduSessionStateCold indicates that the session needs a fresh CookieJar and bootstrap request.
+	BaiduSessionStateCold BaiduSessionState = "cold"
+	// BaiduSessionStateWarm indicates that the bootstrapped session can issue a paced search request.
+	BaiduSessionStateWarm BaiduSessionState = "warm"
+	// BaiduSessionStateCooling indicates that upstream risk controls have temporarily disabled the session.
+	BaiduSessionStateCooling BaiduSessionState = "cooling"
 )
 
 // Classification identifies the outcome of one upstream search attempt.
@@ -106,28 +130,35 @@ type Warning struct {
 
 type Attempt struct {
 	// Provider identifies the provider that made this upstream attempt.
-	Provider        ProviderName        `json:"provider,omitempty"`
-	Transport       TransportName       `json:"transport"`
-	HeaderProfile   string              `json:"header_profile,omitempty"`
-	RequestURL      string              `json:"request_url,omitempty"`
-	HTTPStatus      int                 `json:"http_status,omitempty"`
-	FinalURL        string              `json:"final_url,omitempty"`
-	ElapsedMS       int64               `json:"elapsed_ms"`
-	Classification  Classification      `json:"classification"`
-	ParserError     string              `json:"parser_error,omitempty"`
-	OriginalError   string              `json:"original_error,omitempty"`
-	ResponseHeaders map[string][]string `json:"response_headers,omitempty"`
-	BodyPreview     string              `json:"body_preview,omitempty"`
-	BodySHA256      string              `json:"body_sha256,omitempty"`
+	Provider          ProviderName        `json:"provider,omitempty"`
+	Strategy          BaiduStrategyName   `json:"strategy,omitempty"`
+	Transport         TransportName       `json:"transport"`
+	HeaderProfile     string              `json:"header_profile,omitempty"`
+	RequestURL        string              `json:"request_url,omitempty"`
+	HTTPStatus        int                 `json:"http_status,omitempty"`
+	FinalURL          string              `json:"final_url,omitempty"`
+	PageTitle         string              `json:"page_title,omitempty"`
+	ElapsedMS         int64               `json:"elapsed_ms"`
+	Classification    Classification      `json:"classification"`
+	SessionState      BaiduSessionState   `json:"session_state,omitempty"`
+	SessionGeneration uint64              `json:"session_generation,omitempty"`
+	SessionWaitMS     int64               `json:"session_wait_ms,omitempty"`
+	BlockedUntil      *time.Time          `json:"blocked_until,omitempty"`
+	ParserError       string              `json:"parser_error,omitempty"`
+	OriginalError     string              `json:"original_error,omitempty"`
+	ResponseHeaders   map[string][]string `json:"response_headers,omitempty"`
+	BodyPreview       string              `json:"body_preview,omitempty"`
+	BodySHA256        string              `json:"body_sha256,omitempty"`
 }
 
 type Meta struct {
 	// RequestedProvider preserves the provider selected by the caller.
-	RequestedProvider ProviderName  `json:"requested_provider,omitempty"`
-	Transport         TransportName `json:"transport"`
-	Cached            bool          `json:"cached"`
-	Degraded          bool          `json:"degraded"`
-	FallbackCount     int           `json:"fallback_count"`
+	RequestedProvider ProviderName      `json:"requested_provider,omitempty"`
+	Transport         TransportName     `json:"transport"`
+	Strategy          BaiduStrategyName `json:"strategy,omitempty"`
+	Cached            bool              `json:"cached"`
+	Degraded          bool              `json:"degraded"`
+	FallbackCount     int               `json:"fallback_count"`
 	// ProviderFallbackCount records cross-provider fallback transitions.
 	ProviderFallbackCount int    `json:"provider_fallback_count"`
 	TookMS                int64  `json:"took_ms"`

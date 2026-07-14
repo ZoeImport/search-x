@@ -18,6 +18,8 @@ var (
 	NameChromeDesktopPrimary Name = "chrome_desktop_primary"
 	// NameChromeDesktopSecondary identifies the secondary configured desktop profile.
 	NameChromeDesktopSecondary Name = "chrome_desktop_secondary"
+	// NameBaiduFixedSession identifies the stable HTTP identity used by Baidu's Cookie session.
+	NameBaiduFixedSession Name = "baidu_fixed_session"
 )
 
 // BrandVersion is one Chromium user-agent client-hint brand entry.
@@ -59,6 +61,19 @@ type Pool interface {
 // StaticPool is an immutable, concurrency-safe profile pool.
 type StaticPool struct {
 	profiles []Profile
+}
+
+// NewBaiduFixedSessionProfile builds the request identity verified by the low-frequency Cookie session baseline.
+func NewBaiduFixedSessionProfile(userAgent string) (Profile, error) {
+	pool, err := NewChromiumDesktopPool(userAgent)
+	if err != nil {
+		return Profile{}, err
+	}
+	profile := cloneProfile(pool.profiles[0])
+	profile.Name = NameBaiduFixedSession
+	profile.AcceptLanguage = "zh-CN,zh;q=0.9,en;q=0.8"
+	delete(profile.Headers, "Upgrade-Insecure-Requests")
+	return profile, nil
 }
 
 // NewChromiumDesktopPool builds two coherent desktop profiles around one

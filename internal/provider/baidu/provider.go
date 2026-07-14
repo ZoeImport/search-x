@@ -10,7 +10,6 @@ import (
 
 	"web-search-backend/internal/detector"
 	"web-search-backend/internal/domain"
-	"web-search-backend/internal/transport"
 )
 
 type ArtifactStore interface {
@@ -25,28 +24,19 @@ type Waiter interface {
 }
 
 type Provider struct {
-	transports []transport.SearchTransport
-	artifacts  ArtifactStore
-	breaker    *Breaker
-	limiter    Waiter
-	delay      Waiter
+	chain     *StrategyChain
+	artifacts ArtifactStore
+	breaker   *Breaker
 }
 
-func NewProvider(transports []transport.SearchTransport, artifacts ArtifactStore, breaker *Breaker, limiter Waiter, delays ...Waiter) *Provider {
+func NewProvider(chain *StrategyChain, artifacts ArtifactStore, breaker *Breaker) (*Provider, error) {
+	if chain == nil || len(chain.steps) == 0 {
+		return nil, fmt.Errorf("Baidu strategy chain is empty")
+	}
 	if breaker == nil {
 		breaker = NewBreaker(time.Now)
 	}
-	var delay Waiter
-	if len(delays) > 0 {
-		delay = delays[0]
-	}
-	return &Provider{
-		transports: append([]transport.SearchTransport(nil), transports...),
-		artifacts:  artifacts,
-		breaker:    breaker,
-		limiter:    limiter,
-		delay:      delay,
-	}
+	return &Provider{chain: chain, artifacts: artifacts, breaker: breaker}, nil
 }
 
 func (p *Provider) Name() domain.ProviderName {
@@ -58,48 +48,52 @@ func (p *Provider) Search(ctx context.Context, request domain.SearchRequest) (do
 	if requestID == "" {
 		requestID = "req_internal"
 	}
-	attempts := make([]domain.Attempt, 0, len(p.transports))
-	artifactPaths := make([]string, 0, len(p.transports)*2)
+	steps := p.chain.stepsCopy()
+	attempts := make([]domain.Attempt, 0, len(steps))
+	artifactPaths := make([]string, 0, len(steps)*2)
 	warnings := make([]domain.Warning, 0)
 
-	for _, current := range p.transports {
-		if !p.breaker.Allow(current.Name()) {
+	for _, step := range steps {
+		current := step.Transport
+		if step.UseBreaker && !p.breaker.Allow(current.Name()) {
 			attempts = append(attempts, domain.Attempt{
+				Strategy:       step.Name,
 				Transport:      current.Name(),
 				Classification: detector.Blocked,
 				OriginalError:  fmt.Sprintf("transport %s circuit is open", current.Name()),
 			})
 			continue
 		}
-		if p.limiter != nil {
-			if err := p.limiter.Wait(ctx); err != nil {
-				attempts = append(attempts, domain.Attempt{
-					Transport:      current.Name(),
-					Classification: detector.Timeout,
-					OriginalError:  fmt.Sprintf("wait for provider rate limiter: %v", err),
-				})
-				break
-			}
-		}
-		if p.delay != nil {
-			if err := p.delay.Wait(ctx); err != nil {
-				attempts = append(attempts, domain.Attempt{
-					Transport:      current.Name(),
-					Classification: detector.Timeout,
-					OriginalError:  fmt.Sprintf("wait for provider jitter: %v", err),
-				})
-				break
-			}
+		if err := waitForStrategy(ctx, step); err != nil {
+			attempts = append(attempts, domain.Attempt{
+				Strategy:       step.Name,
+				Transport:      current.Name(),
+				Classification: detector.Timeout,
+				OriginalError:  fmt.Sprintf("wait for Baidu strategy %s: %v", step.Name, err),
+			})
+			break
 		}
 
 		response, fetchErr := current.Fetch(ctx, request)
+		if response.PageTitle == "" && len(response.Body) > 0 {
+			response.PageTitle = detector.ExtractTitle(response.Body)
+		}
 		attempt := domain.Attempt{
-			Transport:     current.Name(),
-			HeaderProfile: response.HeaderProfile,
-			RequestURL:    response.RequestURL,
-			HTTPStatus:    response.StatusCode,
-			FinalURL:      response.FinalURL,
-			ElapsedMS:     response.Elapsed.Milliseconds(),
+			Strategy:          step.Name,
+			Transport:         current.Name(),
+			HeaderProfile:     response.HeaderProfile,
+			RequestURL:        response.RequestURL,
+			HTTPStatus:        response.StatusCode,
+			FinalURL:          response.FinalURL,
+			PageTitle:         response.PageTitle,
+			ElapsedMS:         response.Elapsed.Milliseconds(),
+			SessionState:      response.SessionState,
+			SessionGeneration: response.SessionGeneration,
+			SessionWaitMS:     response.SessionWait.Milliseconds(),
+		}
+		if !response.BlockedUntil.IsZero() {
+			blockedUntil := response.BlockedUntil
+			attempt.BlockedUntil = &blockedUntil
 		}
 		if request.Debug && p.artifacts != nil {
 			attempt.BodyPreview, attempt.BodySHA256 = p.artifacts.Preview(response.Body)
@@ -123,27 +117,49 @@ func (p *Provider) Search(ctx context.Context, request domain.SearchRequest) (do
 		}
 
 		if fetchErr != nil {
-			classification := detector.NetworkError
-			if errors.Is(fetchErr, context.DeadlineExceeded) || errors.Is(fetchErr, context.Canceled) {
-				classification = detector.Timeout
+			classification := response.Classification
+			var sessionErr *SessionError
+			if errors.As(fetchErr, &sessionErr) && sessionErr.Classification != "" {
+				classification = sessionErr.Classification
+			}
+			if classification == "" {
+				classification = detector.NetworkError
+				if errors.Is(fetchErr, context.DeadlineExceeded) || errors.Is(fetchErr, context.Canceled) {
+					classification = detector.Timeout
+				}
 			}
 			attempt.Classification = classification
 			attempt.OriginalError = fetchErr.Error()
 			attempts = append(attempts, attempt)
+			if step.UseBreaker {
+				p.tripStrategy(step.Name, classification)
+			}
+			if !p.chain.policy.Allows(classification) {
+				return domain.SearchResponse{}, buildSearchError(attempts, artifactPaths)
+			}
 			continue
 		}
 
-		classification := detector.Classify(response.StatusCode, response.FinalURL, response.Body)
+		classification := response.Classification
+		if classification == "" {
+			classification = detector.Classify(response.StatusCode, response.FinalURL, response.PageTitle, response.Body)
+		}
 		attempt.Classification = classification
-		if classification != detector.Normal {
+		if classification != detector.Normal && classification != detector.Empty {
 			attempt.OriginalError = fmt.Sprintf(
-				"baidu response classified as %s: status=%d final_url=%s",
+				"baidu response classified as %s: status=%d final_url=%s title=%q",
 				classification,
 				response.StatusCode,
 				response.FinalURL,
+				response.PageTitle,
 			)
 			attempts = append(attempts, attempt)
-			p.breaker.Trip(current.Name(), classification)
+			if step.UseBreaker {
+				p.tripStrategy(step.Name, classification)
+			}
+			if !p.chain.policy.Allows(classification) {
+				return domain.SearchResponse{}, buildSearchError(attempts, artifactPaths)
+			}
 			continue
 		}
 
@@ -153,6 +169,9 @@ func (p *Provider) Search(ctx context.Context, request domain.SearchRequest) (do
 			attempt.ParserError = parserErr.Error()
 			attempt.OriginalError = parserErr.Error()
 			attempts = append(attempts, attempt)
+			if !p.chain.policy.Allows(detector.ParseChanged) {
+				return domain.SearchResponse{}, buildSearchError(attempts, artifactPaths)
+			}
 			continue
 		}
 		if len(results) == 0 {
@@ -165,6 +184,7 @@ func (p *Provider) Search(ctx context.Context, request domain.SearchRequest) (do
 			Provider: p.Name(),
 			Results:  results,
 			Meta: domain.Meta{
+				Strategy:      step.Name,
 				Transport:     current.Name(),
 				FallbackCount: len(attempts) - 1,
 				RequestID:     requestID,
@@ -179,6 +199,14 @@ func (p *Provider) Search(ctx context.Context, request domain.SearchRequest) (do
 	}
 
 	return domain.SearchResponse{}, buildSearchError(attempts, artifactPaths)
+}
+
+func (p *Provider) tripStrategy(name domain.BaiduStrategyName, classification domain.Classification) {
+	for _, step := range p.chain.steps {
+		if step.UseBreaker && step.Name == name {
+			p.breaker.Trip(step.Transport.Name(), classification)
+		}
+	}
 }
 
 func parseForTransport(name domain.TransportName, body []byte, limit int) ([]domain.SearchResult, []domain.Warning, error) {

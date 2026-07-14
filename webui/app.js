@@ -336,13 +336,20 @@ function renderAttempts(container, debug, originalError, rawText) {
     const list = create("dl");
     addDiagnosticValue(list, "Provider", attempt.provider);
     addDiagnosticValue(list, "Stage", attempt.stage);
+    addDiagnosticValue(list, "Strategy", attempt.strategy);
     addDiagnosticValue(list, "Implementation", attempt.implementation);
     addDiagnosticValue(list, "Transport", attempt.transport);
+    addDiagnosticValue(list, "Header profile", attempt.header_profile);
     addDiagnosticValue(list, "Classification", attempt.classification);
+    addDiagnosticValue(list, "Session state", attempt.session_state);
+    addDiagnosticValue(list, "Session generation", attempt.session_generation);
+    addDiagnosticValue(list, "Session wait", `${readable(attempt.session_wait_ms, 0)} ms`);
+    addDiagnosticValue(list, "Blocked until", attempt.blocked_until);
     addDiagnosticValue(list, "HTTP status", attempt.http_status);
     addDiagnosticValue(list, "Elapsed", `${readable(attempt.elapsed_ms, 0)} ms`);
     addDiagnosticValue(list, "Request URL", attempt.request_url);
     addDiagnosticValue(list, "Final URL", attempt.final_url);
+    addDiagnosticValue(list, "Page title", attempt.page_title);
     addDiagnosticValue(list, "Parser error", attempt.parser_error);
     addDiagnosticValue(list, "Original error", attempt.original_error);
     addDiagnosticValue(list, "Body SHA-256", attempt.body_sha256);
@@ -383,6 +390,7 @@ function renderSearchMeta(response) {
   const meta = response?.meta || {};
   addMeta(elements.searchMeta, "Actual", response?.provider || response?.selected_provider, true);
   addMeta(elements.searchMeta, "Requested", meta.requested_provider || response?.requested_provider);
+  if (meta.strategy) addMeta(elements.searchMeta, "Strategy", meta.strategy);
   addMeta(elements.searchMeta, "Transport", meta.transport);
   addMeta(elements.searchMeta, "Time", `${readable(meta.took_ms, 0)} ms`);
   if (meta.search_took_ms !== undefined) addMeta(elements.searchMeta, "Search", `${meta.search_took_ms} ms`);

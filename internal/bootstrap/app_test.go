@@ -52,6 +52,8 @@ func TestNewBuildsEndToEndOfflineSearchApp(t *testing.T) {
 		TotalTimeout: 2 * time.Second, DesktopTimeout: time.Second, MobileTimeout: time.Second, ChromeTimeout: time.Second,
 		DuckDuckGoTimeout: time.Second, BingTimeout: time.Second, BraveTimeout: time.Second, ProviderBrowserSlots: 2,
 		FreshTTL: time.Minute, StaleTTL: time.Hour, ProviderRate: 1000, ProviderBurst: 100,
+		BaiduSessionMinInterval: time.Nanosecond, BaiduSessionMaxJitter: 0,
+		BaiduCaptchaCooldown: time.Minute, BaiduRateLimitCooldown: time.Minute, BaiduFallbackReserve: 0,
 		ClientRate: 1000, ClientBurst: 100, CacheMaxItems: 10, MaxBodyBytes: 1 << 20,
 		ReadEnabled: true, ReadHTTPTimeout: time.Second,
 		ReadFreshTTL: time.Minute, ReadStaleTTL: time.Hour, ReadCacheMaxItems: 10,

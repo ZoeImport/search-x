@@ -18,3 +18,15 @@ func TestBuildSearchURL(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestBuildSearchURLOmitsPaginationParametersForFirstPage(t *testing.T) {
+	got, err := BuildSearchURL("https://www.baidu.com/s?rn=99&pn=99", domain.SearchRequest{
+		Query: "中文 golang", Limit: 5, Page: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, "rn=") || strings.Contains(got, "pn=") {
+		t.Fatal(got)
+	}
+}

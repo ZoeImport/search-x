@@ -53,7 +53,11 @@ func New(config config.Config) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	jar, err := cookiejar.New(nil)
+	fixedBaiduProfile, err := headerprofile.NewBaiduFixedSessionProfile(config.UserAgent)
+	if err != nil {
+		return nil, fmt.Errorf("select fixed Baidu header profile: %w", err)
+	}
+	pooledBaiduJar, err := cookiejar.New(nil)
 	if err != nil {
 		return nil, fmt.Errorf("create cookie jar: %w", err)
 	}
@@ -61,7 +65,7 @@ func New(config config.Config) (*App, error) {
 	baseTransport.MaxIdleConns = 20
 	baseTransport.MaxIdleConnsPerHost = 4
 	baseTransport.IdleConnTimeout = 90 * time.Second
-	baiduHTTPClient := &http.Client{Transport: baseTransport, Jar: jar}
+	baiduHTTPClient := &http.Client{Transport: baseTransport, Jar: pooledBaiduJar}
 	duckDuckGoHTTPClient := &http.Client{Transport: baseTransport}
 
 	desktopClient, err := httpsearch.New(httpsearch.Config{
@@ -138,7 +142,37 @@ func New(config config.Config) (*App, error) {
 		closeBrowsers()
 		return nil, err
 	}
-	baiduProvider := baidu.NewProvider(transports, artifactStore, baidu.NewBreaker(time.Now), limiter, jitter)
+	sessionPacer, err := baidu.NewFixedSessionPacer(config.BaiduSessionMinInterval, config.BaiduSessionMaxJitter, time.Now)
+	if err != nil {
+		closeBrowsers()
+		return nil, fmt.Errorf("create fixed Baidu session pacer: %w", err)
+	}
+	sessionTransport, err := baidu.NewSessionTransport(baidu.SessionConfig{
+		BootstrapURL: origin(config.DesktopURL), SearchURL: config.DesktopURL,
+		RequestTimeout: config.DesktopTimeout, MinInterval: config.BaiduSessionMinInterval,
+		MaxJitter: config.BaiduSessionMaxJitter, CaptchaCooldown: config.BaiduCaptchaCooldown,
+		RateLimitCooldown: config.BaiduRateLimitCooldown, FallbackReserve: config.BaiduFallbackReserve,
+		MaxBodyBytes: config.MaxBodyBytes,
+	}, fixedBaiduProfile, baidu.NewHTTPSessionClientFactory(baseTransport), sessionPacer, baidu.BaiduResponseClassifier{}, time.Now)
+	if err != nil {
+		closeBrowsers()
+		return nil, fmt.Errorf("create fixed Baidu session transport: %w", err)
+	}
+	strategyChain, err := baidu.NewStrategyChain(baidu.ConservativeStrategyFallback{},
+		baidu.StrategyStep{Name: domain.BaiduStrategyNameFixedSession, Transport: sessionTransport},
+		baidu.StrategyStep{Name: domain.BaiduStrategyNameHeaderPool, Transport: transports[0], Waiters: []baidu.Waiter{limiter, jitter}, UseBreaker: true},
+		baidu.StrategyStep{Name: domain.BaiduStrategyNameHeaderPool, Transport: transports[1], Waiters: []baidu.Waiter{limiter, jitter}, UseBreaker: true},
+		baidu.StrategyStep{Name: domain.BaiduStrategyNameHeaderPool, Transport: transports[2], Waiters: []baidu.Waiter{limiter, jitter}, UseBreaker: true},
+	)
+	if err != nil {
+		closeBrowsers()
+		return nil, fmt.Errorf("create Baidu strategy chain: %w", err)
+	}
+	baiduProvider, err := baidu.NewProvider(strategyChain, artifactStore, baidu.NewBreaker(time.Now))
+	if err != nil {
+		closeBrowsers()
+		return nil, fmt.Errorf("create Baidu provider: %w", err)
+	}
 	bingProvider, err := bing.New(bingChromeClient, artifactStore)
 	if err != nil {
 		closeBrowsers()

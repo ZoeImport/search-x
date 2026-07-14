@@ -45,18 +45,23 @@ type Config struct {
 	// BraveTimeout limits one Brave browser request.
 	BraveTimeout time.Duration
 	// ProviderBrowserSlots bounds tabs per search browser client.
-	ProviderBrowserSlots int
-	FreshTTL             time.Duration
-	StaleTTL             time.Duration
-	ProviderRate         float64
-	ProviderBurst        int
-	JitterMin            time.Duration
-	JitterMax            time.Duration
-	ClientRate           float64
-	ClientBurst          int
-	CacheMaxItems        int
-	MaxBodyBytes         int64
-	TrustedProxies       []string
+	ProviderBrowserSlots    int
+	FreshTTL                time.Duration
+	StaleTTL                time.Duration
+	ProviderRate            float64
+	ProviderBurst           int
+	JitterMin               time.Duration
+	JitterMax               time.Duration
+	BaiduSessionMinInterval time.Duration
+	BaiduSessionMaxJitter   time.Duration
+	BaiduCaptchaCooldown    time.Duration
+	BaiduRateLimitCooldown  time.Duration
+	BaiduFallbackReserve    time.Duration
+	ClientRate              float64
+	ClientBurst             int
+	CacheMaxItems           int
+	MaxBodyBytes            int64
+	TrustedProxies          []string
 	// ReadEnabled controls registration of the read API.
 	ReadEnabled bool
 	// ReadHTTPTimeout limits the direct HTTP read stage.
@@ -88,51 +93,56 @@ type Config struct {
 // Load reads environment overrides and rejects invalid configuration.
 func Load() (Config, error) {
 	config := Config{
-		Address:              ":8080",
-		Debug:                true,
-		DebugDir:             "./var/debug",
-		DebugPreviewBytes:    32 * 1024,
-		ChromeProfileDir:     "./var/chrome-profile",
-		BingProfileDir:       "./var/chrome-profile-bing",
-		BraveProfileDir:      "./var/chrome-profile-brave",
-		ChromeHeadless:       true,
-		DesktopURL:           "https://www.baidu.com/s",
-		MobileURL:            "https://m.baidu.com/s",
-		DuckDuckGoURL:        "https://html.duckduckgo.com/html/",
-		BingURL:              "https://www.bing.com/search",
-		BraveURL:             "https://search.brave.com/search",
-		UserAgent:            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7871.115 Safari/537.36",
-		TotalTimeout:         20 * time.Second,
-		ContentTimeout:       30 * time.Second,
-		DesktopTimeout:       4 * time.Second,
-		MobileTimeout:        4 * time.Second,
-		ChromeTimeout:        10 * time.Second,
-		DuckDuckGoTimeout:    5 * time.Second,
-		BingTimeout:          10 * time.Second,
-		BraveTimeout:         10 * time.Second,
-		ProviderBrowserSlots: 2,
-		FreshTTL:             15 * time.Minute,
-		StaleTTL:             24 * time.Hour,
-		ProviderRate:         1,
-		ProviderBurst:        3,
-		JitterMin:            200 * time.Millisecond,
-		JitterMax:            800 * time.Millisecond,
-		ClientRate:           5,
-		ClientBurst:          10,
-		CacheMaxItems:        1000,
-		MaxBodyBytes:         4 << 20,
-		ReadEnabled:          true,
-		ReadHTTPTimeout:      6 * time.Second,
-		ReadBrowserEnabled:   true,
-		ReadBrowserTimeout:   12 * time.Second,
-		ReadBrowserWait:      2 * time.Second,
-		ReadBrowserSlots:     3,
-		ReadChromeProfileDir: "./var/chrome-profile-read",
-		ReadFreshTTL:         30 * time.Minute,
-		ReadStaleTTL:         24 * time.Hour,
-		ReadCacheMaxItems:    500,
-		ReadMaxBodyBytes:     5 << 20,
-		ReadMaxRedirects:     5,
+		Address:                 ":8080",
+		Debug:                   true,
+		DebugDir:                "./var/debug",
+		DebugPreviewBytes:       32 * 1024,
+		ChromeProfileDir:        "./var/chrome-profile",
+		BingProfileDir:          "./var/chrome-profile-bing",
+		BraveProfileDir:         "./var/chrome-profile-brave",
+		ChromeHeadless:          true,
+		DesktopURL:              "https://www.baidu.com/s",
+		MobileURL:               "https://m.baidu.com/s",
+		DuckDuckGoURL:           "https://html.duckduckgo.com/html/",
+		BingURL:                 "https://www.bing.com/search",
+		BraveURL:                "https://search.brave.com/search",
+		UserAgent:               "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7871.115 Safari/537.36",
+		TotalTimeout:            20 * time.Second,
+		ContentTimeout:          30 * time.Second,
+		DesktopTimeout:          4 * time.Second,
+		MobileTimeout:           4 * time.Second,
+		ChromeTimeout:           10 * time.Second,
+		DuckDuckGoTimeout:       5 * time.Second,
+		BingTimeout:             10 * time.Second,
+		BraveTimeout:            10 * time.Second,
+		ProviderBrowserSlots:    2,
+		FreshTTL:                15 * time.Minute,
+		StaleTTL:                24 * time.Hour,
+		ProviderRate:            1,
+		ProviderBurst:           3,
+		JitterMin:               200 * time.Millisecond,
+		JitterMax:               800 * time.Millisecond,
+		BaiduSessionMinInterval: 3 * time.Second,
+		BaiduSessionMaxJitter:   2 * time.Second,
+		BaiduCaptchaCooldown:    30 * time.Minute,
+		BaiduRateLimitCooldown:  5 * time.Minute,
+		BaiduFallbackReserve:    5 * time.Second,
+		ClientRate:              5,
+		ClientBurst:             10,
+		CacheMaxItems:           1000,
+		MaxBodyBytes:            4 << 20,
+		ReadEnabled:             true,
+		ReadHTTPTimeout:         6 * time.Second,
+		ReadBrowserEnabled:      true,
+		ReadBrowserTimeout:      12 * time.Second,
+		ReadBrowserWait:         2 * time.Second,
+		ReadBrowserSlots:        3,
+		ReadChromeProfileDir:    "./var/chrome-profile-read",
+		ReadFreshTTL:            30 * time.Minute,
+		ReadStaleTTL:            24 * time.Hour,
+		ReadCacheMaxItems:       500,
+		ReadMaxBodyBytes:        5 << 20,
+		ReadMaxRedirects:        5,
 	}
 
 	stringValues := []struct {
@@ -196,8 +206,22 @@ func Load() (Config, error) {
 		{"SEARCH_STALE_TTL", &config.StaleTTL},
 		{"SEARCH_JITTER_MIN", &config.JitterMin},
 		{"SEARCH_JITTER_MAX", &config.JitterMax},
+		{"SEARCH_BAIDU_SESSION_MIN_INTERVAL", &config.BaiduSessionMinInterval},
+		{"SEARCH_BAIDU_CAPTCHA_COOLDOWN", &config.BaiduCaptchaCooldown},
+		{"SEARCH_BAIDU_RATE_LIMIT_COOLDOWN", &config.BaiduRateLimitCooldown},
 	} {
 		if err := parseDurationEnv(item.key, item.target); err != nil {
+			return Config{}, err
+		}
+	}
+	for _, item := range []struct {
+		key    string
+		target *time.Duration
+	}{
+		{"SEARCH_BAIDU_SESSION_JITTER_MAX", &config.BaiduSessionMaxJitter},
+		{"SEARCH_BAIDU_FALLBACK_RESERVE", &config.BaiduFallbackReserve},
+	} {
+		if err := parseNonNegativeDurationEnv(item.key, item.target); err != nil {
 			return Config{}, err
 		}
 	}
@@ -301,6 +325,19 @@ func parseDurationEnv(key string, target *time.Duration) error {
 	return nil
 }
 
+func parseNonNegativeDurationEnv(key string, target *time.Duration) error {
+	value := os.Getenv(key)
+	if value == "" {
+		return nil
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil || parsed < 0 {
+		return fmt.Errorf("%s must be a non-negative duration: %q", key, value)
+	}
+	*target = parsed
+	return nil
+}
+
 func parsePositiveFloatEnv(key string, target *float64) error {
 	value := os.Getenv(key)
 	if value == "" {
@@ -335,6 +372,7 @@ func knownEnvironmentVariables() []string {
 		"SEARCH_TOTAL_TIMEOUT", "SEARCH_CONTENT_TIMEOUT", "SEARCH_DESKTOP_TIMEOUT", "SEARCH_MOBILE_TIMEOUT", "SEARCH_CHROME_TIMEOUT", "SEARCH_DUCKDUCKGO_TIMEOUT", "SEARCH_BING_TIMEOUT", "SEARCH_BRAVE_TIMEOUT",
 		"SEARCH_FRESH_TTL", "SEARCH_STALE_TTL", "SEARCH_PROVIDER_RATE", "SEARCH_PROVIDER_BURST",
 		"SEARCH_JITTER_MIN", "SEARCH_JITTER_MAX",
+		"SEARCH_BAIDU_SESSION_MIN_INTERVAL", "SEARCH_BAIDU_SESSION_JITTER_MAX", "SEARCH_BAIDU_CAPTCHA_COOLDOWN", "SEARCH_BAIDU_RATE_LIMIT_COOLDOWN", "SEARCH_BAIDU_FALLBACK_RESERVE",
 		"SEARCH_CLIENT_RATE", "SEARCH_CLIENT_BURST", "SEARCH_CACHE_MAX_ITEMS", "SEARCH_MAX_BODY_BYTES",
 		"SEARCH_TRUSTED_PROXIES",
 		"SEARCH_READ_ENABLED", "SEARCH_READ_HTTP_TIMEOUT", "SEARCH_READ_BROWSER_ENABLED", "SEARCH_READ_BROWSER_TIMEOUT", "SEARCH_READ_BROWSER_WAIT", "SEARCH_READ_CHROME_PROFILE_DIR",

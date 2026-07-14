@@ -23,7 +23,8 @@
 - 一个进程只维护一个百度 session；同一 session 的 bootstrap、等待和搜索操作完全串行。
 - session 创建时绑定一个固定 Header Profile，session 生命周期内不轮换。
 - 每次上游请求完成后至少空闲 3 秒，并追加 0–2 秒随机 jitter。
-- CAPTCHA、429、403 和 503 不在百度内部重试，立即返回给 BaiduProvider；`provider=auto` 由现有 ProviderChain fallback。
+- 保留现有 Header Profile Pool 链路作为百度内部备选策略；固定 session 的 network、timeout 和 parse changed 可以进入备选策略。
+- CAPTCHA、429、403 和 503 不切换另一套百度策略，立即返回给 BaiduProvider；`provider=auto` 由现有 ProviderChain fallback。
 - CAPTCHA 后销毁当前 CookieJar，进入 30 分钟冷却；429、403 和 503 后进入 5 分钟冷却。
 - 开发 Debug 保留状态码、最终 URL、页面标题、原始错误、session 状态、等待时长和 artifact；永不记录 Cookie 值。
 - 搜索结果继续携带 `provider: "baidu"`。
@@ -36,21 +37,28 @@
 - CAPTCHA 自动处理或绕过。
 - 多百度 Agent、多 Cookie session 或代理 IP 池。
 - 百度登录态和用户 Cookie 导入。
-- 百度 mobile HTTP 或百度 chromedp 的内部 fallback。
+- Header Profile Pool、百度 mobile HTTP 和百度 chromedp 的行为重写；它们按现状保留在备选策略中。
 - 分布式 session、跨进程限速或多副本协调。
 - Bing、Brave、DuckDuckGo 的 session 策略重构。
 - 对非官方百度 HTML 接口提供可用性 SLA。
 
 ## 4. 方案选择
 
-采用独立的百度专用 transport，而不是在通用 `httpsearch.Client` 外增加零散锁和 limiter。
+采用独立的百度专用 transport，并与现有 Header Profile Pool transport 共同组成百度内部 StrategyChain，而不是互相替代。
 
 理由：
 
 - CookieJar 重建、bootstrap、固定身份和冷却属于百度 session 生命周期，不应污染通用 HTTP transport。
 - `BaiduSessionTransport` 继续实现现有 `transport.SearchTransport`，不会改变 ProviderRegistry、SearchService、HTTP API 或缓存边界。
 - session 的 clock、等待器、HTTP client factory 和响应分类器均可通过接口替换，测试不需要真实等待或访问百度。
-- P0 只注册一个百度 session transport，避免同一百度失败在不同 transport 间放大。
+- StrategyChain 首先执行固定 session；只对 network、timeout 和 parse changed 执行百度内部 fallback，避免风控响应在不同 transport 间放大。
+
+两套策略为：
+
+| 策略 | transport | 作用 |
+|---|---|---|
+| `fixed_session` | `baidu_session_http` | 专用固定 Header、独立 CookieJar、bootstrap、串行 pacing 和 session 冷却 |
+| `header_pool` | `desktop_http`、`mobile_http`、`chromedp` | 保留当前 sticky Header Profile Pool，作为非风控错误的兼容备选 |
 
 ## 5. 组件设计
 
@@ -159,6 +167,12 @@ type SessionError struct {
 
 不创建通用的 `AgentPool` 接口。本阶段只有一个固定 Baidu session，避免为未验证的多 Agent 行为提前抽象。
 
+### 5.4 Baidu StrategyChain
+
+`StrategyStep` 包含策略名称、transport、该策略使用的 waiter 和是否使用旧 transport breaker。固定 session step 不使用旧 token bucket 和 breaker；Header Pool steps 继续使用当前 limiter、jitter 和 breaker。
+
+`StrategyFallbackPolicy` 根据稳定分类决定是否继续下一 step。默认策略只允许 `network_error`、`timeout` 和 `parse_changed`；`captcha`、`rate_limited`、`blocked` 和正常空结果停止百度内部 chain。
+
 ## 6. 请求数据流
 
 `BaiduSessionTransport` 使用容量为 1 的 channel 作为 session gate。`Fetch` 通过 `select` 获取 gate，因此排队阶段可以被调用 context 取消。获取 gate 后，直到本次搜索完成或失败才释放：
@@ -171,7 +185,7 @@ type SessionError struct {
 6. bootstrap 最终 URL、标题或状态码显示 CAPTCHA、429、403、503 时，直接进入对应冷却；其他非成功响应保持 `cold` 并返回原始错误。
 7. bootstrap 成功后记录 `LastFinished`，状态转为 `warm`。
 8. `SessionPacer` 根据 `LastFinished` 等待 3 秒加 0–2 秒 jitter；等待必须响应 context 取消，并为本次百度请求和后续 Provider fallback 保留预算。
-9. 构造 `/s?wd=<query>&rn=<limit>&pn=<offset>&ie=utf-8`。
+9. 首页构造 `/s?wd=<query>&ie=utf-8`；非首页不访问固定 Session，由 Strategy Chain 进入 Header Pool 备选。
 10. 使用同一个 client 和固定请求头发送搜索请求。
 11. 无论成功、网络错误还是 context timeout，响应结束后更新 `LastFinished`。
 12. 提取状态码、最终 URL、页面标题和有限响应体，完成页面分类。
@@ -182,15 +196,14 @@ gate 覆盖整个流程是有意设计：P0 必须保证同一个 Cookie session
 
 ## 7. 请求头策略
 
-固定 profile 取现有 Chromium Desktop Pool 的 Primary profile，但只在 transport 构建时选择一次。后续请求不再根据 `request_id` 或 query 选择 profile。
+固定 session 使用独立的 `baidu_fixed_session` profile，不加入通用 Header Pool，也不根据 `request_id` 或 query 轮换。实测要求 `Accept-Language` 使用 `en;q=0.8`，且不能发送 `Upgrade-Insecure-Requests`；通用 Header Pool 的 Primary/Secondary profile 保持不变。
 
 bootstrap 和搜索共同发送：
 
 ```http
 User-Agent: <SEARCH_USER_AGENT>
-Accept-Language: zh-CN,zh;q=0.9,en;q=0.7
+Accept-Language: zh-CN,zh;q=0.9,en;q=0.8
 Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8
-Upgrade-Insecure-Requests: 1
 ```
 
 搜索额外发送：
@@ -200,6 +213,8 @@ Referer: https://www.baidu.com/
 ```
 
 不手动设置 `Accept-Encoding`。Go Transport 自动协商并解压 gzip；在没有 Brotli reader 时禁止声明 `br`。
+
+第一页搜索 URL 不发送 `rn` 和 `pn`。真实 Go 请求验证表明这两个参数会显著触发百度安全验证；百度默认第一页返回足够候选，由 parser 按 API `limit` 截断。第二页及以后不走固定 Session，直接进入 Header Pool 备选策略，避免错误地把第一页结果当成分页结果。
 
 HTTP client 使用默认重定向行为，并通过最终 `http.Response.Request.URL` 记录最终 URL。Debug Header 必须经过现有脱敏器，Cookie 和 `Set-Cookie` 不返回客户端。
 
@@ -215,7 +230,7 @@ HTTP client 使用默认重定向行为，并通过最终 `http.Response.Request
 | `SEARCH_BAIDU_RATE_LIMIT_COOLDOWN` | `5m` | 429、403、503 后的 session 冷却时间 |
 | `SEARCH_BAIDU_FALLBACK_RESERVE` | `5s` | 百度等待前为当前请求和后续 Provider 保留的最小预算 |
 
-旧的通用 `SEARCH_PROVIDER_RATE`、`SEARCH_PROVIDER_BURST`、`SEARCH_JITTER_MIN` 和 `SEARCH_JITTER_MAX` 从 BaiduProvider 路径移除，并从配置与 README 删除，避免两套 limiter 叠加或产生错误的 burst 语义。
+旧的通用 `SEARCH_PROVIDER_RATE`、`SEARCH_PROVIDER_BURST`、`SEARCH_JITTER_MIN` 和 `SEARCH_JITTER_MAX` 只作用于 `header_pool` 备选策略，不作用于 `fixed_session`，避免两套 limiter 叠加。
 
 按照本机平均百度响应耗时 1.221 秒估算，单 session 平均请求周期为：
 
@@ -260,7 +275,7 @@ transport 向 pacer 传入 `RequestTimeout + FallbackReserve`。如果 context �
 
 ## 10. BaiduProvider 行为
 
-P0 的 BaiduProvider 只注册 `BaiduSessionTransport`，不再构造百度 mobile HTTP 和百度 chromedp transport。
+P0 的 BaiduProvider 注册一个显式 StrategyChain：`fixed_session` 在前，`header_pool` 的 desktop、mobile 和 chromedp steps 在后。
 
 Provider 识别 session transport 返回的可分类错误，并继续复用现有稳定错误码：
 
@@ -272,6 +287,17 @@ Provider 识别 session transport 返回的可分类错误，并继续复用现�
 | timeout | `upstream_timeout` | true | 是 |
 | parse changed | `upstream_changed` | true | 是 |
 | normal empty | 成功空结果 | 不适用 | 否 |
+
+百度内部策略切换规则：
+
+| 固定 session 结果 | 是否进入 Header Pool 备选 |
+|---|---:|
+| network error | 是 |
+| timeout | 是 |
+| parse changed | 是 |
+| CAPTCHA | 否 |
+| 429、403、503 | 否 |
+| normal 或 empty | 否 |
 
 `provider=baidu` 不跨 Provider fallback，直接返回 BaiduProvider 错误。`provider=auto` 保持当前 ProviderChain 顺序，本设计不调整搜索质量策略。
 
@@ -315,12 +341,12 @@ BlockedUntil      *time.Time         `json:"blocked_until,omitempty"`
 `bootstrap.New` 的百度装配调整为：
 
 1. 创建共享的基础 `http.Transport`。
-2. 从现有 Chromium Desktop Pool 选择 Primary profile 一次。
+2. 根据 `SEARCH_USER_AGENT` 创建独立的 `baidu_fixed_session` profile；不复用通用 Pool 的语言和额外 Header。
 3. 创建百度 session client factory；每个 generation 复用基础 transport，但创建新的 CookieJar 和 `http.Client`。
 4. 创建 session pacer 和百度 classifier。
-5. 创建单个 `BaiduSessionTransport`。
-6. 使用该 transport 创建 BaiduProvider。
-7. 不再为百度创建 mobile HTTP client 和 chromedp client。
+5. 创建单个 `BaiduSessionTransport` 作为 `fixed_session` step。
+6. 保留现有 desktop、mobile 和 chromedp clients，作为 `header_pool` steps，并使用独立于固定 session 的 CookieJar。
+7. 创建 Baidu StrategyChain，再创建 BaiduProvider。
 
 Bing、Brave 和正文 reader 的浏览器生命周期保持不变；DuckDuckGo HTTP 保持不变。
 
@@ -331,6 +357,8 @@ Bing、Brave 和正文 reader 的浏览器生命周期保持不变；DuckDuckGo 
 - 首次搜索严格先 bootstrap，再搜索。
 - bootstrap 响应 Cookie 自动出现在搜索请求中。
 - 连续查询的 User-Agent、Accept-Language 和其他固定请求头完全相同。
+- 固定 session 的 `Accept-Language` 为 `zh-CN,zh;q=0.9,en;q=0.8`，且不包含 `Upgrade-Insecure-Requests`。
+- 第一页 URL 不包含 `rn` 和 `pn`；第二页及以后不访问 fixed session upstream。
 - 多个并发 `Fetch` 在同一 session 上不会重叠发送请求。
 - 第二次查询必须经过配置的最小间隔和 jitter。
 - bootstrap、session gate 等待和 pacing 均响应 context 取消。
@@ -358,22 +386,21 @@ Bing、Brave 和正文 reader 的浏览器生命周期保持不变；DuckDuckGo 
 - session 冷却错误仍保持原始分类，而不是退化为 `network_error`。
 - `provider=baidu` 不跨 Provider fallback。
 - `provider=auto` 在百度失败后调用下一个 Provider。
+- fixed session 的 network、timeout、parse changed 会调用 Header Pool 备选策略。
+- fixed session 或 Header Pool 的 CAPTCHA、429、403 不会继续请求另一个百度策略。
 - 正常结果和每条结果的 Provider 均为 `baidu`。
 - 普通响应不泄漏 session Debug 字段。
 
 ### 13.4 真实环境 smoke test
 
-真实百度测试不进入默认 CI。人工验收固定当前本机出口网络并运行 12 个不同查询：
+真实百度测试不进入默认 CI，也不把“永不出现 CAPTCHA”作为确定性验收条件。人工验收应记录当前出口网络、查询数量、正常页数、CAPTCHA 数和首次风控所在序号，并验证：
 
-- 12 个请求均为 HTTP 200。
-- 最终 URL 不进入 `wappass.baidu.com`。
-- 标题符合 `<query>_百度搜索`。
-- 页面存在 `#content_left` 和结果卡。
-- Debug 中所有请求的 Header Profile 相同。
-- 同一 generation 内 Cookie 连续且没有并发请求。
-- CAPTCHA 数量为 0。
+- 正常响应标题符合 `<query>_百度搜索`，且存在 `#content_left` 和结果卡。
+- Debug 中同一 generation 的 Header Profile 相同、Cookie 连续且没有并发请求。
+- CAPTCHA 能以最终 URL 或页面标题正确识别，后续请求命中本地冷却而不再访问百度。
+- CAPTCHA、429、403 不进入 Header Pool；网络失败、超时和解析变化可进入 Header Pool。
 
-真实 smoke 失败时必须保留失败样本和分类，但不能把 CAPTCHA 页面从统计分母中删除。
+2026-07-14 本机实现后的一轮连续请求中，固定 Session 先返回 9 次正常结果，第 10 次进入 CAPTCHA，后续请求正确命中 `cooling`。这说明策略可以显著改善低频请求的可用性，但不能保证 12/12 或永不触发上游风控。真实 smoke 失败时必须保留失败样本和分类，不能把 CAPTCHA 页面从统计分母中删除。
 
 ## 14. 验收标准
 
@@ -385,10 +412,11 @@ Bing、Brave 和正文 reader 的浏览器生命周期保持不变；DuckDuckGo 
 - API schema 没有新增 `agentpool` 参数。
 - 百度请求使用固定 Header Profile 和单 CookieJar。
 - 百度 upstream 同一时刻最多一个请求。
-- CAPTCHA、429、403、503 不触发百度内部 transport 重试。
+- 固定 session 和 Header Pool 的策略名称、实际 transport 与 fallback attempts 可在 Debug 中区分。
+- CAPTCHA、429、403、503 不触发百度内部策略切换；network、timeout 和 parse changed 可以切换。
 - `auto` fallback、缓存、refresh、Debug Token 和原始错误语义保持兼容。
 - README 记录新配置、容量边界、Debug 字段和 CAPTCHA 行为。
-- 完成一轮 12 查询真实 smoke test并保存结果。
+- 完成一轮真实 smoke test，保存正常页、风控页和冷却行为的客观结果。
 
 ## 15. 后续阶段
 

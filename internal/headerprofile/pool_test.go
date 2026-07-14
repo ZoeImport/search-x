@@ -65,6 +65,19 @@ func TestStaticPoolReturnsIndependentHeaderCopies(t *testing.T) {
 	}
 }
 
+func TestNewBaiduFixedSessionProfileMatchesVerifiedBaseline(t *testing.T) {
+	profile, err := NewBaiduFixedSessionProfile("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7871.115 Safari/537.36")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.Name != NameBaiduFixedSession || profile.AcceptLanguage != "zh-CN,zh;q=0.9,en;q=0.8" {
+		t.Fatalf("profile=%+v", profile)
+	}
+	if _, exists := profile.Headers["Upgrade-Insecure-Requests"]; exists {
+		t.Fatalf("fixed Baidu profile contains Upgrade-Insecure-Requests: %+v", profile.Headers)
+	}
+}
+
 func TestNewChromiumDesktopPoolBuildsCoherentClientHints(t *testing.T) {
 	pool, err := NewChromiumDesktopPool("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7871.115 Safari/537.36")
 	if err != nil {

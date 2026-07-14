@@ -53,6 +53,23 @@ func TestClientFetchPreservesRawResponseAndQuery(t *testing.T) {
 	}
 }
 
+func TestClientFetchOmitsPaginationParametersForFirstPage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Query().Has("pn") || request.URL.Query().Has("rn") {
+			t.Fatalf("unexpected first-page query: %s", request.URL.RawQuery)
+		}
+		_, _ = io.WriteString(writer, `<html><div id="content_left"></div></html>`)
+	}))
+	defer server.Close()
+	client, err := New(Config{Name: "desktop_http", BaseURL: server.URL + "?pn=9&rn=9", Timeout: time.Second, MaxBodyBytes: 1024}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Fetch(context.Background(), domain.SearchRequest{Query: "go", Limit: 5, Page: 1}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestClientFetchRejectsOversizedBodyAndReturnsPartialResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, strings.Repeat("x", 65))
