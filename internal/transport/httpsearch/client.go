@@ -17,7 +17,7 @@ import (
 const defaultMaxBodyBytes int64 = 4 << 20
 
 type Config struct {
-	Name         string
+	Name         domain.TransportName
 	BaseURL      string
 	UserAgent    string
 	Referer      string
@@ -31,7 +31,7 @@ type Client struct {
 }
 
 func New(config Config, client *http.Client) (*Client, error) {
-	config.Name = strings.TrimSpace(config.Name)
+	config.Name = domain.TransportName(strings.TrimSpace(string(config.Name)))
 	if config.Name == "" {
 		return nil, fmt.Errorf("transport name is empty")
 	}
@@ -54,7 +54,7 @@ func New(config Config, client *http.Client) (*Client, error) {
 	return &Client{config: config, client: client}, nil
 }
 
-func (c *Client) Name() string {
+func (c *Client) Name() domain.TransportName {
 	return c.config.Name
 }
 

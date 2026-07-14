@@ -5,22 +5,23 @@ import (
 	"time"
 
 	"web-search-backend/internal/detector"
+	"web-search-backend/internal/domain"
 )
 
 type Breaker struct {
 	mu        sync.Mutex
 	now       func() time.Time
-	openUntil map[string]time.Time
+	openUntil map[domain.TransportName]time.Time
 }
 
 func NewBreaker(now func() time.Time) *Breaker {
 	if now == nil {
 		now = time.Now
 	}
-	return &Breaker{now: now, openUntil: make(map[string]time.Time)}
+	return &Breaker{now: now, openUntil: make(map[domain.TransportName]time.Time)}
 }
 
-func (b *Breaker) Allow(name string) bool {
+func (b *Breaker) Allow(name domain.TransportName) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	until, exists := b.openUntil[name]
@@ -34,7 +35,7 @@ func (b *Breaker) Allow(name string) bool {
 	return false
 }
 
-func (b *Breaker) Trip(name string, classification detector.Classification) {
+func (b *Breaker) Trip(name domain.TransportName, classification detector.Classification) {
 	var cooldown time.Duration
 	switch classification {
 	case detector.Captcha:

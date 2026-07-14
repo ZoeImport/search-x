@@ -29,8 +29,8 @@ type errorBody struct {
 }
 
 type errorMeta struct {
-	Provider  string `json:"provider"`
-	RequestID string `json:"request_id"`
+	Provider  domain.ProviderName `json:"provider"`
+	RequestID string              `json:"request_id"`
 }
 
 type errorResponse struct {
@@ -49,7 +49,7 @@ func (h *handler) search(c *gin.Context) {
 	}
 	query.Q = strings.TrimSpace(query.Q)
 	if query.Provider == "" {
-		query.Provider = "baidu"
+		query.Provider = string(domain.ProviderNameBaidu)
 	}
 	if query.Limit == 0 {
 		query.Limit = 10
@@ -75,7 +75,7 @@ func (h *handler) search(c *gin.Context) {
 	ctx, cancel := contextWithTimeout(c, h.options.TotalTimeout)
 	defer cancel()
 	request := domain.SearchRequest{
-		Query: query.Q, Provider: query.Provider, RequestID: requestID(c), Limit: query.Limit, Page: query.Page,
+		Query: query.Q, Provider: domain.ProviderName(query.Provider), RequestID: requestID(c), Limit: query.Limit, Page: query.Page,
 		Refresh: query.Refresh, Debug: effectiveDebug,
 	}
 	response, err := h.searcher.Search(ctx, request)
@@ -87,7 +87,7 @@ func (h *handler) search(c *gin.Context) {
 		response.Query = query.Q
 	}
 	if response.Provider == "" {
-		response.Provider = query.Provider
+		response.Provider = domain.ProviderName(query.Provider)
 	}
 	if response.Meta.RequestID == "" {
 		response.Meta.RequestID = requestID(c)
@@ -122,7 +122,7 @@ func writeError(c *gin.Context, err error, debug bool) {
 	}
 	body := errorResponse{
 		Error: errorBody{Code: searchErr.Code, Message: searchErr.Message, Retryable: searchErr.Retryable},
-		Meta:  errorMeta{Provider: "baidu", RequestID: requestID(c)},
+		Meta:  errorMeta{Provider: domain.ProviderNameBaidu, RequestID: requestID(c)},
 	}
 	if debug {
 		body.Error.OriginalError = searchErr.Error()

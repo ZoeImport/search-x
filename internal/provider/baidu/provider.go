@@ -49,8 +49,8 @@ func NewProvider(transports []transport.SearchTransport, artifacts ArtifactStore
 	}
 }
 
-func (p *Provider) Name() string {
-	return "baidu"
+func (p *Provider) Name() domain.ProviderName {
+	return domain.ProviderNameBaidu
 }
 
 func (p *Provider) Search(ctx context.Context, request domain.SearchRequest) (domain.SearchResponse, error) {
@@ -104,7 +104,7 @@ func (p *Provider) Search(ctx context.Context, request domain.SearchRequest) (do
 			attempt.BodyPreview, attempt.BodySHA256 = p.artifacts.Preview(response.Body)
 			attempt.ResponseHeaders = p.artifacts.RedactHeaders(response.Headers)
 			if len(response.Body) > 0 {
-				path, err := p.artifacts.SaveHTML(requestID, current.Name(), response.Body)
+				path, err := p.artifacts.SaveHTML(requestID, string(current.Name()), response.Body)
 				if err != nil {
 					warnings = append(warnings, domain.Warning{Code: "artifact_save_error", Message: err.Error()})
 				} else {
@@ -112,7 +112,7 @@ func (p *Provider) Search(ctx context.Context, request domain.SearchRequest) (do
 				}
 			}
 			if len(response.Screenshot) > 0 {
-				path, err := p.artifacts.SaveScreenshot(requestID, current.Name(), response.Screenshot)
+				path, err := p.artifacts.SaveScreenshot(requestID, string(current.Name()), response.Screenshot)
 				if err != nil {
 					warnings = append(warnings, domain.Warning{Code: "artifact_save_error", Message: err.Error()})
 				} else {
@@ -180,11 +180,11 @@ func (p *Provider) Search(ctx context.Context, request domain.SearchRequest) (do
 	return domain.SearchResponse{}, buildSearchError(attempts, artifactPaths)
 }
 
-func parseForTransport(name string, body []byte, limit int) ([]domain.SearchResult, []domain.Warning, error) {
+func parseForTransport(name domain.TransportName, body []byte, limit int) ([]domain.SearchResult, []domain.Warning, error) {
 	switch name {
-	case "mobile_http":
+	case domain.TransportNameMobileHTTP:
 		return ParseMobile(body, limit)
-	case "chromedp":
+	case domain.TransportNameChromedp:
 		results, warnings, desktopErr := ParseDesktop(body, limit)
 		if desktopErr == nil {
 			return results, warnings, nil

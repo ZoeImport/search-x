@@ -27,7 +27,7 @@ type debugAwareProvider struct {
 	release chan struct{}
 }
 
-func (p *debugAwareProvider) Name() string { return "baidu" }
+func (p *debugAwareProvider) Name() domain.ProviderName { return domain.ProviderNameBaidu }
 func (p *debugAwareProvider) Search(_ context.Context, request domain.SearchRequest) (domain.SearchResponse, error) {
 	p.calls.Add(1)
 	p.started <- request.Debug
@@ -39,7 +39,7 @@ func (p *debugAwareProvider) Search(_ context.Context, request domain.SearchRequ
 	return response, nil
 }
 
-func (p *countingProvider) Name() string { return "baidu" }
+func (p *countingProvider) Name() domain.ProviderName { return domain.ProviderNameBaidu }
 func (p *countingProvider) Search(context.Context, domain.SearchRequest) (domain.SearchResponse, error) {
 	p.calls.Add(1)
 	if p.started != nil {

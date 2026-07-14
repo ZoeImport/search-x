@@ -9,10 +9,10 @@ import (
 )
 
 type stubProvider struct {
-	name string
+	name domain.ProviderName
 }
 
-func (s stubProvider) Name() string { return s.name }
+func (s stubProvider) Name() domain.ProviderName { return s.name }
 
 func (s stubProvider) Search(context.Context, domain.SearchRequest) (domain.SearchResponse, error) {
 	return domain.SearchResponse{Provider: s.name}, nil
@@ -20,21 +20,21 @@ func (s stubProvider) Search(context.Context, domain.SearchRequest) (domain.Sear
 
 func TestRegistryRegisterAndGet(t *testing.T) {
 	r := provider.NewRegistry()
-	if err := r.Register(stubProvider{name: "baidu"}); err != nil {
+	if err := r.Register(stubProvider{name: domain.ProviderNameBaidu}); err != nil {
 		t.Fatal(err)
 	}
-	p, ok := r.Get("baidu")
-	if !ok || p.Name() != "baidu" {
+	p, ok := r.Get(domain.ProviderNameBaidu)
+	if !ok || p.Name() != domain.ProviderNameBaidu {
 		t.Fatalf("unexpected provider: %#v %v", p, ok)
 	}
 }
 
 func TestRegistryRejectsDuplicate(t *testing.T) {
 	r := provider.NewRegistry()
-	if err := r.Register(stubProvider{name: "baidu"}); err != nil {
+	if err := r.Register(stubProvider{name: domain.ProviderNameBaidu}); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Register(stubProvider{name: "baidu"}); err == nil {
+	if err := r.Register(stubProvider{name: domain.ProviderNameBaidu}); err == nil {
 		t.Fatal("expected duplicate error")
 	}
 }

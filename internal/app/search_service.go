@@ -159,9 +159,9 @@ func normalizeRequest(request domain.SearchRequest) (domain.SearchRequest, error
 		original := fmt.Errorf("query exceeds 256 characters")
 		return domain.SearchRequest{}, &domain.SearchError{Code: domain.ErrInvalidRequest, Message: "搜索文本超过 256 个字符", Retryable: false, Original: original}
 	}
-	request.Provider = strings.ToLower(strings.TrimSpace(request.Provider))
+	request.Provider = domain.ProviderName(strings.ToLower(strings.TrimSpace(string(request.Provider))))
 	if request.Provider == "" {
-		request.Provider = "baidu"
+		request.Provider = domain.ProviderNameBaidu
 	}
 	if request.Limit == 0 {
 		request.Limit = 10

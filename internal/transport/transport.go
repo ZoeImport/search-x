@@ -19,6 +19,6 @@ type Response struct {
 }
 
 type SearchTransport interface {
-	Name() string
+	Name() domain.TransportName
 	Fetch(context.Context, domain.SearchRequest) (Response, error)
 }

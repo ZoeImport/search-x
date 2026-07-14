@@ -14,13 +14,13 @@ import (
 )
 
 type fakeTransport struct {
-	name     string
+	name     domain.TransportName
 	response transport.Response
 	err      error
 	calls    *int
 }
 
-func (f fakeTransport) Name() string { return f.name }
+func (f fakeTransport) Name() domain.TransportName { return f.name }
 func (f fakeTransport) Fetch(context.Context, domain.SearchRequest) (transport.Response, error) {
 	if f.calls != nil {
 		*f.calls++

@@ -7,6 +7,6 @@ import (
 )
 
 type Provider interface {
-	Name() string
+	Name() domain.ProviderName
 	Search(context.Context, domain.SearchRequest) (domain.SearchResponse, error)
 }

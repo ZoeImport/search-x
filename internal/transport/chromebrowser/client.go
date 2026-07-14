@@ -84,8 +84,8 @@ func New(config Config) (*Client, error) {
 	}, nil
 }
 
-func (c *Client) Name() string {
-	return "chromedp"
+func (c *Client) Name() domain.TransportName {
+	return domain.TransportNameChromedp
 }
 
 func (c *Client) Fetch(ctx context.Context, request domain.SearchRequest) (transport.Response, error) {
