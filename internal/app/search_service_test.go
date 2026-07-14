@@ -148,6 +148,23 @@ func TestSearchServiceRefreshBypassesFreshCache(t *testing.T) {
 	}
 }
 
+func TestSearchServiceAnnotatesEveryResultWithActualProvider(t *testing.T) {
+	p := &countingProvider{result: domain.SearchResponse{
+		Provider: domain.ProviderNameBaidu,
+		Results:  []domain.SearchResult{{Title: "one"}, {Title: "two", Provider: domain.ProviderNameBing}},
+	}}
+	service, _ := newServiceForTest(t, p, time.Now)
+	got, err := service.Search(context.Background(), domain.SearchRequest{
+		Query: "golang", Provider: domain.ProviderNameBaidu, Limit: 10, Page: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Results[0].Provider != domain.ProviderNameBaidu || got.Results[1].Provider != domain.ProviderNameBing {
+		t.Fatalf("results=%#v", got.Results)
+	}
+}
+
 func TestSearchServiceDoesNotCacheDebug(t *testing.T) {
 	p := &countingProvider{result: domain.SearchResponse{
 		Provider: "baidu",

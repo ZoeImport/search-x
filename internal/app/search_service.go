@@ -72,6 +72,7 @@ func (s *SearchService) Search(ctx context.Context, request domain.SearchRequest
 			if response.Results == nil {
 				response.Results = make([]domain.SearchResult, 0)
 			}
+			annotateResultProviders(&response)
 			if response.Warnings == nil {
 				response.Warnings = make([]domain.Warning, 0)
 			}
@@ -119,6 +120,7 @@ func (s *SearchService) prepareFresh(response domain.SearchResponse, requestedPr
 	if response.Results == nil {
 		response.Results = make([]domain.SearchResult, 0)
 	}
+	annotateResultProviders(&response)
 	if response.Warnings == nil {
 		response.Warnings = make([]domain.Warning, 0)
 	}
@@ -151,7 +153,19 @@ func (s *SearchService) prepareStale(response domain.SearchResponse, requestedPr
 	if response.Results == nil {
 		response.Results = make([]domain.SearchResult, 0)
 	}
+	annotateResultProviders(&response)
 	return response
+}
+
+func annotateResultProviders(response *domain.SearchResponse) {
+	if response == nil {
+		return
+	}
+	for index := range response.Results {
+		if response.Results[index].Provider == "" {
+			response.Results[index].Provider = response.Provider
+		}
+	}
 }
 
 func normalizeRequest(request domain.SearchRequest) (domain.SearchRequest, error) {

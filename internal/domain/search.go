@@ -85,10 +85,11 @@ type SearchRequest struct {
 }
 
 type SearchResult struct {
-	Title   string `json:"title"`
-	URL     string `json:"url"`
-	Snippet string `json:"snippet"`
-	Rank    int    `json:"rank"`
+	Title    string       `json:"title"`
+	URL      string       `json:"url"`
+	Snippet  string       `json:"snippet"`
+	Rank     int          `json:"rank"`
+	Provider ProviderName `json:"provider"`
 }
 
 type Warning struct {
