@@ -1,0 +1,31 @@
+services:
+  search-api:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      SEARCH_ADDR: ":8080"
+      SEARCH_DEBUG: "${SEARCH_DEBUG:-true}"
+      SEARCH_DEBUG_TOKEN: "${SEARCH_DEBUG_TOKEN:-}"
+      SEARCH_DEBUG_DIR: "/data/debug"
+      SEARCH_CHROME_PROFILE_DIR: "/data/chrome-profile"
+      SEARCH_CHROME_PATH: "/usr/bin/chromium"
+      SEARCH_CHROME_HEADLESS: "true"
+      SEARCH_CHROME_NO_SANDBOX: "true"
+      SEARCH_PROVIDER_RATE: "1"
+      SEARCH_PROVIDER_BURST: "3"
+      SEARCH_JITTER_MIN: "200ms"
+      SEARCH_JITTER_MAX: "800ms"
+    volumes:
+      - chrome-profile:/data/chrome-profile
+      - debug-artifacts:/data/debug
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  chrome-profile: {}
+  debug-artifacts: {}

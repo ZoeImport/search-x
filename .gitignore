@@ -1,0 +1,8 @@
+/search-api
+/server
+/bin/
+/var/
+/tmp/
+/jq
+*.log
+.DS_Store

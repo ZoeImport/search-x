@@ -1,0 +1,8 @@
+.git
+.gitignore
+var
+bin
+search-api
+server
+*.log
+README.md
