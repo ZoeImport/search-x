@@ -5,7 +5,7 @@ const BASE_URL_KEY = "searchroom.baseUrl";
 
 const elements = Object.fromEntries([
   "searchForm", "queryInput", "baseUrlInput", "providerInput", "limitInput", "pageInput",
-  "refreshInput", "debugInput", "tokenRow", "tokenInput", "searchButton", "healthStatus",
+  "refreshInput", "debugInput", "contentEnabledInput", "candidateLimitInput", "tokenRow", "tokenInput", "searchButton", "healthStatus",
   "searchStatus", "searchMeta", "searchNotices", "resultsList", "resultCount", "pagination",
   "previousPage", "nextPage", "pageLabel", "searchDiagnostics", "attemptCount", "diagnosticsBody",
   "searchJSONPanel", "searchJSONTree", "copySearchJSON",
@@ -20,6 +20,7 @@ const state = {
   readController: null,
   selectedURL: "",
   selectedCard: null,
+  selectedResult: null,
   searchPayload: null,
   readPayload: null
 };
@@ -380,10 +381,14 @@ function showSearchStatus(kind, title, description, rawDetails) {
 function renderSearchMeta(response) {
   clear(elements.searchMeta);
   const meta = response?.meta || {};
-  addMeta(elements.searchMeta, "Actual", response?.provider, true);
-  addMeta(elements.searchMeta, "Requested", meta.requested_provider);
+  addMeta(elements.searchMeta, "Actual", response?.provider || response?.selected_provider, true);
+  addMeta(elements.searchMeta, "Requested", meta.requested_provider || response?.requested_provider);
   addMeta(elements.searchMeta, "Transport", meta.transport);
   addMeta(elements.searchMeta, "Time", `${readable(meta.took_ms, 0)} ms`);
+  if (meta.search_took_ms !== undefined) addMeta(elements.searchMeta, "Search", `${meta.search_took_ms} ms`);
+  if (meta.read_took_ms !== undefined) addMeta(elements.searchMeta, "Read", `${meta.read_took_ms} ms`);
+  if (response?.candidate_count !== undefined) addMeta(elements.searchMeta, "Candidates", response.candidate_count);
+  if (response?.readable_count !== undefined) addMeta(elements.searchMeta, "Readable", response.readable_count);
   addMeta(elements.searchMeta, "Cache", meta.cached ? `${readable(meta.cache_age_seconds, 0)}s` : "miss");
   addMeta(elements.searchMeta, "Fallback", meta.provider_fallback_count ?? meta.fallback_count ?? 0);
   addMeta(elements.searchMeta, "Degraded", formatBoolean(meta.degraded));
@@ -396,7 +401,12 @@ function createResultCard(result, index, fallbackProvider) {
   card.type = "button";
   card.dataset.url = result?.url || "";
   card.setAttribute("aria-label", `读取正文：${readable(result?.title, "无标题")}`);
-  card.append(create("span", "rank", String(result?.rank ?? index + 1).padStart(2, "0")));
+  const rank = create("span", "rank");
+  const selectedRank = result?.selected_rank;
+  const originalRank = result?.original_rank ?? result?.rank ?? index + 1;
+  rank.append(create("span", "rank-primary", String(selectedRank ?? originalRank).padStart(2, "0")));
+  if (selectedRank !== undefined) rank.append(create("small", "rank-detail", `原 ${originalRank}`));
+  card.append(rank);
   const main = create("span", "result-main");
   main.append(
     create("span", "result-source", readable(result?.provider, fallbackProvider)),
@@ -415,11 +425,16 @@ function renderSearchResponse(response) {
   clear(elements.resultsList);
   setHidden(elements.searchStatus, results.length > 0);
   if (!results.length) showSearchStatus("empty", "查询完成，但没有结果", "可以更换关键词、Provider 或页码后重试。");
-  results.forEach((result, index) => elements.resultsList.append(createResultCard(result, index, response?.provider)));
+  const fallbackProvider = response?.provider || response?.selected_provider;
+  results.forEach((result, index) => elements.resultsList.append(createResultCard(result, index, fallbackProvider)));
 
   elements.resultCount.textContent = `${results.length} 条 · ${readable(response?.query, "")}`;
   renderSearchMeta(response);
-  renderWarnings(elements.searchNotices, response?.warnings);
+  const failureWarnings = (Array.isArray(response?.failures) ? response.failures : []).map((failure) => ({
+    code: failure?.code || "read_failed",
+    message: `原排名 ${readable(failure?.original_rank)} · ${readable(failure?.url)}`
+  }));
+  renderWarnings(elements.searchNotices, [...(response?.warnings || []), ...failureWarnings]);
 
   const attemptTotal = renderAttempts(elements.diagnosticsBody, response?.debug, "", "");
   elements.attemptCount.textContent = attemptTotal ? `· ${attemptTotal} attempts` : "";
@@ -427,11 +442,16 @@ function renderSearchResponse(response) {
   renderJSONTree(elements.searchJSONTree, response);
   setHidden(elements.searchJSONPanel, false);
 
+  const combined = response?.candidate_count !== undefined;
   const page = Number(elements.pageInput.value) || 1;
   elements.pageLabel.textContent = `第 ${page} 页`;
   elements.previousPage.disabled = page <= 1;
   elements.nextPage.disabled = results.length < (Number(elements.limitInput.value) || 10) || page >= 10;
-  setHidden(elements.pagination, results.length === 0);
+  setHidden(elements.pagination, combined || results.length === 0);
+
+  if (combined && results.length > 0) {
+    selectAndRead(elements.resultsList.firstElementChild, results[0]);
+  }
 }
 
 function renderSearchError(error) {
@@ -482,6 +502,7 @@ async function runSearch() {
   sessionStorage.setItem(BASE_URL_KEY, baseURL);
   sessionStorage.setItem(DEBUG_TOKEN_KEY, elements.tokenInput.value);
 
+  const combined = elements.contentEnabledInput.checked;
   const params = new URLSearchParams({
     q: query,
     provider: elements.providerInput.value,
@@ -491,7 +512,7 @@ async function runSearch() {
     debug: String(elements.debugInput.checked)
   });
 
-  showSearchStatus("loading", "正在查询搜索源", "Provider chain、缓存与解析状态会在响应后呈现。");
+  showSearchStatus("loading", combined ? "正在搜索并提取正文" : "正在查询搜索源", combined ? "系统会超额搜索候选并优先保留可读正文。" : "Provider chain、缓存与解析状态会在响应后呈现。");
   clear(elements.resultsList);
   setHidden(elements.searchMeta, true);
   setHidden(elements.searchNotices, true);
@@ -503,10 +524,29 @@ async function runSearch() {
   setHealth("", "正在请求");
 
   try {
-    const { payload } = await requestJSON(`${baseURL}/v1/search?${params.toString()}`, {
+    const requestOptions = combined ? {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...debugHeaders(elements.debugInput.checked) },
+      body: JSON.stringify({
+        query,
+        provider: elements.providerInput.value,
+        limit: Number(elements.limitInput.value) || 5,
+        content: {
+          enabled: true,
+          candidate_limit: Number(elements.candidateLimitInput.value) || 0,
+          format: elements.formatInput.value,
+          max_chars: Number(elements.maxCharsInput.value) || 30000
+        },
+        refresh: elements.refreshInput.checked,
+        debug: elements.debugInput.checked
+      }),
+      signal: state.searchController.signal
+    } : {
       headers: debugHeaders(elements.debugInput.checked),
       signal: state.searchController.signal
-    });
+    };
+    const endpoint = combined ? `${baseURL}/v1/search` : `${baseURL}/v1/search?${params.toString()}`;
+    const { payload } = await requestJSON(endpoint, requestOptions);
     renderSearchResponse(payload || {});
     setHealth("is-online", "API 已连接");
   } catch (error) {
@@ -583,6 +623,29 @@ function renderReadResponse(response) {
   activateReaderTab("preview");
 }
 
+function renderCombinedContent(result) {
+  renderReadResponse({
+    url: result?.url,
+    final_url: result?.url,
+    title: result?.title,
+    source_type: "html",
+    content: result?.content || "",
+    content_format: result?.content_format || elements.formatInput.value,
+    content_length: result?.content_length ?? String(result?.content || "").length,
+    truncated: Boolean(result?.truncated),
+    meta: {
+      transport: result?.read_transport,
+      extractor: "combined_search",
+      cached: false,
+      degraded: false,
+      fallback_count: 0,
+      took_ms: state.searchPayload?.meta?.read_took_ms,
+      request_id: state.searchPayload?.meta?.request_id
+    },
+    warnings: []
+  });
+}
+
 async function readResult(result) {
   if (!result?.url) return;
   state.readController?.abort();
@@ -629,8 +692,10 @@ function selectAndRead(card, result) {
   state.selectedCard?.classList.remove("is-selected");
   state.selectedCard = card;
   state.selectedURL = result?.url || "";
+  state.selectedResult = result;
   card.classList.add("is-selected");
-  readResult(result);
+  if (typeof result?.content === "string") renderCombinedContent(result);
+  else readResult(result);
   if (window.innerWidth <= 1080) {
     document.querySelector(".reader-column").scrollIntoView({ behavior: "smooth", block: "start" });
   }
@@ -652,6 +717,7 @@ function initialize() {
     runSearch();
   });
   elements.debugInput.addEventListener("change", () => setHidden(elements.tokenRow, !elements.debugInput.checked));
+  elements.contentEnabledInput.addEventListener("change", updateContentMode);
   elements.tokenInput.addEventListener("input", () => sessionStorage.setItem(DEBUG_TOKEN_KEY, elements.tokenInput.value));
   elements.previousPage.addEventListener("click", () => changePage(-1));
   elements.nextPage.addEventListener("click", () => changePage(1));
@@ -663,9 +729,19 @@ function initialize() {
   elements.copyMarkdown.addEventListener("click", () => copyText(elements.copyMarkdown, elements.articleBody.textContent));
   elements.formatInput.addEventListener("change", () => {
     if (state.selectedURL && state.selectedCard) {
-      readResult({ url: state.selectedURL, title: elements.articleTitle.textContent });
+      if (typeof state.selectedResult?.content === "string") runSearch();
+      else readResult({ url: state.selectedURL, title: elements.articleTitle.textContent });
     }
   });
+  updateContentMode();
+}
+
+function updateContentMode() {
+  const enabled = elements.contentEnabledInput.checked;
+  elements.candidateLimitInput.disabled = !enabled;
+  elements.pageInput.disabled = enabled;
+  elements.limitInput.max = enabled ? "10" : "20";
+  if (enabled && Number(elements.limitInput.value) > 10) elements.limitInput.value = "5";
 }
 
 initialize();

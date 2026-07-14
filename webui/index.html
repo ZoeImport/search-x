@@ -58,6 +58,7 @@
               <option value="baidu">Baidu</option>
               <option value="duckduckgo">DuckDuckGo</option>
               <option value="bing">Bing</option>
+              <option value="brave">Brave</option>
             </select>
           </label>
           <label class="field compact-field">
@@ -80,6 +81,19 @@
               <span>Debug</span>
             </label>
           </div>
+        </div>
+
+        <div class="content-options">
+          <label class="switch-row content-mode-switch">
+            <input id="contentEnabledInput" type="checkbox">
+            <span class="switch"></span>
+            <span>返回可读正文</span>
+          </label>
+          <label class="field compact-field">
+            <span>Candidate limit</span>
+            <input id="candidateLimitInput" type="number" min="0" max="20" value="0" disabled>
+          </label>
+          <p>开启后调用 <code>POST /v1/search</code>，自动超额搜索并保留正文成功结果。</p>
         </div>
 
         <div class="token-row is-hidden" id="tokenRow">
