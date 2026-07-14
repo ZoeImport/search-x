@@ -103,8 +103,8 @@ flowchart LR
 
 ```go
 type Provider interface {
-    Name() string
-    Search(context.Context, domain.SearchRequest) (domain.SearchResponse, error)
+	Name() domain.ProviderName
+	Search(context.Context, domain.SearchRequest) (domain.SearchResponse, error)
 }
 ```
 
@@ -133,6 +133,31 @@ type Provider interface {
 - `debug_unauthorized`。
 - `provider_not_found`。
 - 未识别的非 `SearchError` 编程错误。
+
+### 接口和类型化常量约束
+
+Provider Chain 只依赖 `Provider` 接口，不在 Chain 中判断 Baidu、DuckDuckGo 或 Bing 的具体实现类型。`SearchRequest.Provider`、`SearchResponse.Provider`、`Meta.RequestedProvider` 和 `Attempt.Provider` 均使用 `ProviderName`；transport 名称、错误码和分类值也分别使用自定义业务类型与类型化 `const`。禁止在 Chain、Registry、Handler 和测试中传播魔法字符串。
+
+```go
+// ProviderName 表示一个可注册的搜索来源或搜索策略名称。
+type ProviderName string
+
+const (
+	// ProviderNameAuto 表示自动执行 Provider Chain。
+	ProviderNameAuto ProviderName = "auto"
+
+	// ProviderNameBaidu 表示百度搜索来源。
+	ProviderNameBaidu ProviderName = "baidu"
+
+	// ProviderNameDuckDuckGo 表示 DuckDuckGo 搜索来源。
+	ProviderNameDuckDuckGo ProviderName = "duckduckgo"
+
+	// ProviderNameBing 表示 Bing 搜索来源。
+	ProviderNameBing ProviderName = "bing"
+)
+```
+
+该写法遵循 `reviewcode` G-01：`type ProviderName string` 是自定义业务类型，枚举值集中声明为类型化 `const`；不使用 `type ProviderName = string`，也不使用可变 `var` 模拟常量。导出类型、常量、接口和方法必须提供以自身名称开头的完整 Go Doc 注释。
 
 ## DuckDuckGoProvider
 
@@ -262,17 +287,18 @@ Chain 的成员直接持有 Provider 引用，不在运行期间再次查询 Reg
 测试范围：
 
 1. `ProviderChain` 首个 Provider 成功时不调用后续 Provider。
-2. 可重试上游错误触发下一 Provider。
-3. 非可重试错误和 Context 取消立即停止。
-4. 全部失败时保留按顺序聚合的原始错误和 Debug Attempt。
-5. 成功响应准确设置实际 Provider、请求 Provider、两类 fallback 计数和 degraded 状态。
-6. DuckDuckGo fixture 覆盖正常结果、redirect URL、空结果、页面结构变化、429、5xx 和超时。
-7. Bing fixture 覆盖正常结果、空结果、页面结构变化、安全验证和浏览器错误分类。
-8. 通用 Chromedp Client 分别使用百度和 Bing URL Builder 生成正确分页地址。
-9. HTTP Handler 默认选择 `auto`，显式 `baidu`、`duckduckgo` 或 `bing` 均不跨 Provider fallback。
-10. `auto`、`baidu`、`duckduckgo` 和 `bing` 使用独立缓存键。
-11. stale-cache 文案和错误响应 Provider 不再写死百度。
-12. 离线端到端测试通过本地假 DuckDuckGo Server 和静态 Bing fixture 验证 Gin、Service、Chain、Provider、Parser 和响应 JSON；真实浏览器访问作为手动 smoke test，不进入离线测试。
+2. ProviderName、transport、错误码和分类不使用裸字符串或裸整数。
+3. 可重试上游错误触发下一 Provider。
+4. 非可重试错误和 Context 取消立即停止。
+5. 全部失败时保留按顺序聚合的原始错误和 Debug Attempt。
+6. 成功响应准确设置实际 Provider、请求 Provider、两类 fallback 计数和 degraded 状态。
+7. DuckDuckGo fixture 覆盖正常结果、redirect URL、空结果、页面结构变化、429、5xx 和超时。
+8. Bing fixture 覆盖正常结果、空结果、页面结构变化、安全验证和浏览器错误分类。
+9. 通用 Chromedp Client 分别使用百度和 Bing URL Builder 生成正确分页地址。
+10. HTTP Handler 默认选择 `auto`，显式 `baidu`、`duckduckgo` 或 `bing` 均不跨 Provider fallback。
+11. `auto`、`baidu`、`duckduckgo` 和 `bing` 使用独立缓存键。
+12. stale-cache 文案和错误响应 Provider 不再写死百度。
+13. 离线端到端测试通过本地假 DuckDuckGo Server 和静态 Bing fixture 验证 Gin、Service、Chain、Provider、Parser 和响应 JSON；真实浏览器访问作为手动 smoke test，不进入离线测试。
 
 ## 验收标准
 

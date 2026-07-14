@@ -275,6 +275,189 @@ Chromedp 规则：
 | `ReadResponse` | Content, ContentFormat, ContentLength, Truncated, Meta, Warnings, Debug | API 输出 |
 | `ReadAttempt` | Transport, RequestURL, FinalURL, HTTPStatus, ContentType, ElapsedMS, Classification, OriginalError | Debug 调用链 |
 
+### 接口解耦原则
+
+`ReadService` 只负责编排，不直接依赖 `http.Client`、Chromedp、Readability 或 Markdown 库。凡是存在多个实现、外部 I/O、格式分支或后续已确认扩展点的能力，均通过窄接口注入；纯文本空白清理、Unicode rune 截断等稳定且只有一个实现的内部函数不额外抽象，避免无效接口。
+
+```mermaid
+flowchart LR
+  Service["ReadService"] --> Policy["URLPolicy"]
+  Service --> ReaderChain["ResourceReader Chain"]
+  ReaderChain --> HTTPReader["HTTPReader"]
+  ReaderChain --> BrowserReader["ChromedpReader"]
+  Service --> Detector["SourceTypeDetector"]
+  Service --> Extractors["ExtractorRegistry"]
+  Extractors --> HTMLExtractor["HTMLExtractor"]
+  Extractors --> TextExtractor["PlainTextExtractor"]
+  Service --> Evaluator["QualityEvaluator"]
+  Service --> Converters["ConverterRegistry"]
+  Converters --> Markdown["MarkdownConverter"]
+  Converters --> Text["TextConverter"]
+  Service --> CachePort["ReadCache"]
+```
+
+核心接口定义如下：
+
+```go
+// URLPolicy 校验目标 URL、解析地址并生成可安全连接的目标。
+type URLPolicy interface {
+	ValidateAndResolve(ctx context.Context, rawURL string) (SafeTarget, error)
+}
+
+// ResourceReader 从安全目标读取未经正文提取的资源。
+type ResourceReader interface {
+	Name() ImplementationName
+	Read(ctx context.Context, target SafeTarget) (Resource, error)
+}
+
+// SourceTypeDetector 根据响应元数据和受限内容预览识别资源类型。
+type SourceTypeDetector interface {
+	Detect(resource Resource) (SourceType, error)
+}
+
+// ContentExtractor 将特定源格式转换为统一的结构化正文模型。
+type ContentExtractor interface {
+	Name() ImplementationName
+	Supports(sourceType SourceType) bool
+	Extract(ctx context.Context, resource Resource) (ReadDocument, error)
+}
+
+// QualityEvaluator 判断结构化正文是否可直接返回或需要读取降级。
+type QualityEvaluator interface {
+	Evaluate(document ReadDocument, resource Resource) QualityResult
+}
+
+// ContentConverter 将结构化正文转换为 API 请求指定的输出格式。
+type ContentConverter interface {
+	Name() ImplementationName
+	Supports(format OutputFormat) bool
+	Convert(ctx context.Context, document ReadDocument) (FormattedContent, error)
+}
+
+// ReadCache 保存与最终输出格式无关的结构化正文。
+type ReadCache interface {
+	GetFresh(ctx context.Context, key string) (ReadDocument, bool)
+	GetStale(ctx context.Context, key string) (ReadDocument, bool)
+	Set(ctx context.Context, key string, document ReadDocument) error
+}
+```
+
+接口与实现关系：
+
+| 接口 | 第一阶段实现 | 后续实现或调试替身 |
+|---|---|---|
+| `URLPolicy` | `SafeURLPolicy` | 单元测试 `FakeURLPolicy` |
+| `ResourceReader` | `HTTPReader`、`ChromedpReader` | 文件上传、对象存储或测试 Reader |
+| `SourceTypeDetector` | `MIMETypeDetector` | 文件签名增强 Detector |
+| `ContentExtractor` | `HTMLExtractor`、`PlainTextExtractor` | 第二阶段 `PDFExtractor`、`DOCXExtractor` |
+| `QualityEvaluator` | `ArticleQualityEvaluator` | 站点规则或测试 Evaluator |
+| `ContentConverter` | `MarkdownConverter`、`TextConverter` | JSON Blocks Converter |
+| `ReadCache` | `MemoryReadCache` | Redis Cache 或测试 Cache |
+
+### Registry 和分支编排
+
+格式选择禁止在 `ReadService` 中持续增加 `switch sourceType`。Extractor 和 Converter 使用只读 Registry：
+
+```go
+// ExtractorRegistry 根据源格式返回唯一的正文提取实现。
+type ExtractorRegistry interface {
+	Resolve(sourceType SourceType) (ContentExtractor, error)
+}
+
+// ConverterRegistry 根据输出格式返回唯一的内容转换实现。
+type ConverterRegistry interface {
+	Resolve(format OutputFormat) (ContentConverter, error)
+}
+```
+
+Bootstrap 在启动时完成注册，重复键直接启动失败。Registry 构建完成后不允许运行时修改，避免并发请求期间实现被替换。第二阶段增加 PDF 时只新增 `PDFExtractor` 并注册 `SourceTypePDF`，不修改 Handler、`ReadService`、缓存接口和成功响应模型。
+
+Reader 不使用按格式查找的 Registry，而是由 `ReadService` 持有明确的有序读取策略：先调用 `HTTPReader`；只有 `QualityResult` 明确返回 `QualityActionRender` 时才调用 `ChromedpReader`。该分支通过类型化结果表达，禁止通过错误字符串或正文长度魔法值在 Service 中隐式判断。
+
+### 业务类型和常量规范
+
+所有错误码、源格式、输出格式、读取阶段、质量动作、实现名称和分类值必须遵循 `reviewcode` G-01：定义自定义业务类型，并通过集中、类型化的 `const` 声明枚举值。禁止传播裸 `string`、裸 `int`，禁止在判断和 Registry 键中使用魔法字符串，也禁止使用可变 `var` 模拟常量。
+
+```go
+// SourceType 表示待读取资源的内容类型。
+type SourceType string
+
+const (
+	// SourceTypeHTML 表示 HTML 网页资源。
+	SourceTypeHTML SourceType = "html"
+
+	// SourceTypePlainText 表示纯文本资源。
+	SourceTypePlainText SourceType = "text"
+)
+
+// OutputFormat 表示正文 API 的输出格式。
+type OutputFormat string
+
+const (
+	// OutputFormatMarkdown 表示 Markdown 正文。
+	OutputFormatMarkdown OutputFormat = "markdown"
+
+	// OutputFormatText 表示纯文本正文。
+	OutputFormatText OutputFormat = "text"
+)
+
+// QualityAction 表示正文质量评估后的下一步动作。
+type QualityAction string
+
+const (
+	// QualityActionAccept 表示正文质量满足返回要求。
+	QualityActionAccept QualityAction = "accept"
+
+	// QualityActionRender 表示需要浏览器渲染后重新提取。
+	QualityActionRender QualityAction = "render"
+
+	// QualityActionReject 表示正文不能继续处理。
+	QualityActionReject QualityAction = "reject"
+)
+
+// ImplementationName 表示正文读取流水线中一个可定位的具体实现。
+type ImplementationName string
+
+const (
+	// ImplementationNameHTTPReader 表示受限 HTTP 读取实现。
+	ImplementationNameHTTPReader ImplementationName = "http_reader"
+
+	// ImplementationNameChromedpReader 表示 Chromedp 浏览器读取实现。
+	ImplementationNameChromedpReader ImplementationName = "chromedp_reader"
+
+	// ImplementationNameHTMLExtractor 表示 HTML Readability 提取实现。
+	ImplementationNameHTMLExtractor ImplementationName = "html_extractor"
+
+	// ImplementationNamePlainTextExtractor 表示纯文本提取实现。
+	ImplementationNamePlainTextExtractor ImplementationName = "plain_text_extractor"
+
+	// ImplementationNameMarkdownConverter 表示 Markdown 转换实现。
+	ImplementationNameMarkdownConverter ImplementationName = "markdown_converter"
+
+	// ImplementationNameTextConverter 表示纯文本转换实现。
+	ImplementationNameTextConverter ImplementationName = "text_converter"
+)
+```
+
+`type SourceType string` 是具有独立类型检查能力的自定义类型，不写成 `type SourceType = string`。每个导出类型、常量、接口和方法都必须包含以自身名称开头的完整 Go Doc 注释。第一阶段不提前声明 `SourceTypePDF`；第二阶段实现 `PDFExtractor` 时再同时增加该类型化常量和注册项。
+
+### Debug 分层定位
+
+各实现只返回业务结果或带类型分类的错误，不直接拼装 HTTP Debug 响应。`ReadService` 在每个接口调用边界统一记录 `ReadAttempt`：
+
+```go
+// ReadAttempt 记录正文读取流水线中一次可定位的实现调用。
+type ReadAttempt struct {
+	Stage          ReadStage          `json:"stage"`
+	Implementation ImplementationName `json:"implementation"`
+	Classification ReadClassification `json:"classification"`
+	ElapsedMS      int64              `json:"elapsed_ms"`
+	OriginalError  string             `json:"original_error,omitempty"`
+}
+```
+
+例如 HTTP 提取结果过短后进入浏览器时，Attempt 顺序为 `read/http -> extract/readability -> quality/article -> read/chromedp -> extract/readability -> convert/markdown`。这样可以判断问题属于网络读取、渲染、格式识别、正文提取、质量评估还是输出转换。普通响应删除 `OriginalError` 和 Debug Attempt；授权 Debug 响应保留完整顺序。
+
 ### 目录与代码调整
 
 | 操作 | 路径 | 主要职责 |
@@ -283,10 +466,16 @@ Chromedp 规则：
 | 新增 | `internal/app/read_service.go` | 缓存、HTTP、Browser fallback 和格式化编排 |
 | 新增 | `internal/api/httpapi/read_handler.go` | `POST /v1/read` 参数绑定与 JSON 响应 |
 | 新增 | `internal/read/safeurl/policy.go` | URL、DNS、IP、重定向和 allowlist 策略 |
-| 新增 | `internal/read/fetcher/http.go` | 受限 HTTP 获取和 Content-Type 检测 |
-| 新增 | `internal/read/renderer/chromedp.go` | 隔离浏览器 Context、请求拦截和渲染 |
-| 新增 | `internal/read/extractor/readability.go` | HTML 主内容和元数据提取 |
-| 新增 | `internal/read/formatter/formatter.go` | Markdown、纯文本、绝对链接和 rune 截断 |
+| 新增 | `internal/read/reader/reader.go` | `ResourceReader` 接口和共享 Resource 模型 |
+| 新增 | `internal/read/reader/http.go` | `HTTPReader` 受限网络读取实现 |
+| 新增 | `internal/read/reader/chromedp.go` | `ChromedpReader` 隔离浏览器读取实现 |
+| 新增 | `internal/read/detector/detector.go` | `SourceTypeDetector` 和 MIME 实现 |
+| 新增 | `internal/read/extractor/extractor.go` | `ContentExtractor` 接口和只读 Registry |
+| 新增 | `internal/read/extractor/html.go` | `HTMLExtractor` 主内容和元数据提取 |
+| 新增 | `internal/read/extractor/text.go` | `PlainTextExtractor` 编码与清洗实现 |
+| 新增 | `internal/read/converter/converter.go` | `ContentConverter` 接口和只读 Registry |
+| 新增 | `internal/read/converter/markdown.go` | `MarkdownConverter` 实现 |
+| 新增 | `internal/read/converter/text.go` | `TextConverter` 和 rune 截断实现 |
 | 新增 | `internal/read/quality/evaluator.go` | JS Shell、验证码、登录页和正文质量判定 |
 | 修改 | `internal/api/httpapi/router.go` | 注册 `/v1/read` |
 | 修改 | `internal/bootstrap/app.go` | 装配 ReadService 依赖和关闭浏览器资源 |
@@ -303,6 +492,9 @@ Chromedp 规则：
 | 单套提取逻辑 | HTTP HTML 与渲染后 HTML 使用同一 Readability 和质量检查 |
 | Browser fallback | 仅用于 JS Shell 或正文不足，不用于绕过 401、403、验证码和登录 |
 | Debug 隔离 | 原始错误和 artifact 仅授权 Debug 返回，永不写入缓存 |
+| 实现可替换 | Reader、Detector、Extractor、Evaluator、Converter 和 Cache 通过窄接口注入 |
+| 类型化分支 | 格式、动作、阶段、实现名和错误分类使用自定义类型与类型化常量 |
+| Registry | SourceType 和 OutputFormat 映射由启动期 Registry 管理，不在 Service 堆积 switch |
 | UTF-8 安全截断 | 以 Unicode rune 和段落边界截断，不破坏中文和多字节字符 |
 | 缓存降级 | 实时失败可返回 stale 正文，并明确 degraded 与 warning |
 | 资源边界 | 单 URL、总超时、响应上限、浏览器并发和重定向次数都有硬限制 |
@@ -320,6 +512,9 @@ Chromedp 规则：
 ## Checklist
 
 - [ ] 定义 `ReadRequest`、`ReadDocument`、`ReadResponse` 和稳定错误码。
+- [ ] 按 G-01 定义 SourceType、OutputFormat、QualityAction、ReadStage 和 ReadClassification 类型化常量。
+- [ ] 定义 ResourceReader、SourceTypeDetector、ContentExtractor、QualityEvaluator、ContentConverter 和 ReadCache 窄接口。
+- [ ] 实现启动期只读 ExtractorRegistry 和 ConverterRegistry，拒绝重复注册。
 - [ ] 实现 SafeURLPolicy，覆盖 IPv4、IPv6、DNS rebinding、redirect 和 Browser 子资源。
 - [ ] 实现受限 HTTP Fetcher、Content-Type 检测、解压后大小限制和超时。
 - [ ] 集成 go-readability 和 html-to-markdown/v2。
@@ -329,6 +524,7 @@ Chromedp 规则：
 - [ ] 实现 Read Cache、refresh、stale fallback 和 singleflight。
 - [ ] 注册 `POST /v1/read` 并复用 Debug Token 授权。
 - [ ] 增加 SSRF、重定向、类型、大小、超时、提取、fallback、缓存和 Handler 测试。
+- [ ] 使用 Fake Reader、Extractor、Converter 和 Cache 验证各逻辑分支及 Attempt 顺序。
 - [ ] 增加静态 HTML、JS Shell、验证码、纯文本和异常编码 fixture。
 - [ ] 更新 README、配置表、错误码和本机 curl Demo。
 - [ ] 第二阶段独立设计 PDF 文本提取、扫描件 OCR、页码和文件安全边界。
