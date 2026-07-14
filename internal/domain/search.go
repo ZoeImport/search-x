@@ -14,6 +14,8 @@ const (
 	ProviderNameDuckDuckGo ProviderName = "duckduckgo"
 	// ProviderNameBing selects Bing search only.
 	ProviderNameBing ProviderName = "bing"
+	// ProviderNameBrave selects Brave search only.
+	ProviderNameBrave ProviderName = "brave"
 )
 
 // TransportName identifies the concrete transport used by a provider.
@@ -30,6 +32,8 @@ const (
 	TransportNameDuckDuckGoHTTP TransportName = "duckduckgo_http"
 	// TransportNameBingChromedp identifies Bing browser search.
 	TransportNameBingChromedp TransportName = "bing_chromedp"
+	// TransportNameBraveChromedp identifies Brave browser search.
+	TransportNameBraveChromedp TransportName = "brave_chromedp"
 	// TransportNameFreshCache identifies a fresh cache response.
 	TransportNameFreshCache TransportName = "fresh_cache"
 	// TransportNameStaleCache identifies a stale cache response.
