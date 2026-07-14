@@ -17,6 +17,20 @@
 - 不并发请求多个搜索引擎，不融合或重排不同 Provider 的结果。
 - 不保证任何公开搜索结果页面长期稳定，也不承诺规避搜索引擎安全验证。
 - `provider=baidu` 失败时不静默返回其他搜索引擎结果。
+- 搜索接口不自动下载每条结果的正文；正文读取由独立的 `POST /v1/read` 提供，详细设计见 [正文读取 API 设计规范](./2026-07-14-read-api-design.md)。
+
+## 与正文读取的边界
+
+`GET /v1/search` 负责发现、排序并返回候选 URL；AI 或人类客户端根据标题和摘要选择相关结果，再调用 `POST /v1/read` 获取标准化正文。搜索结果不支持 `include_content=true`，避免一次搜索隐式扇出访问多个第三方站点，导致延迟、资源消耗和失败率失控。
+
+```mermaid
+flowchart LR
+  Client["人类客户端或 AI"] --> Search["GET /v1/search"]
+  Search --> Results["候选 URL 列表"]
+  Results --> Select["客户端选择相关 URL"]
+  Select --> Read["POST /v1/read"]
+  Read --> Document["标准 Markdown 或纯文本"]
+```
 
 ## API 语义
 
