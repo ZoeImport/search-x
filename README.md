@@ -373,7 +373,9 @@ SSRF 防护会拒绝私网、回环、link-local、CGNAT、Metadata、组播、�
 - 相同查询使用 `singleflight` 合并并发请求。
 - BaiduProvider 默认每秒 1 次，burst 3。
 - 每次上游访问增加 200–800 ms jitter。
-- Desktop/Mobile HTTP 使用稳定 User-Agent、Cookie Jar 和连接池。
+- 所有搜索 transport 使用同一个 Header Profile Pool；同一 `request_id` sticky，同一请求内不随机漂移。
+- 每个 profile 同时约束 `User-Agent`、`Accept-Language`、UA Client Hints、`navigator.platform` 和 viewport，避免只改 UA 造成字段冲突。
+- Profile Pool 不是验证码绕过器；上游已返回 CAPTCHA 时仍返回 `captcha_required`，由 `auto` 执行跨 Provider fallback。
 - CAPTCHA 对相应 Transport 熔断 30 分钟。
 - HTTP 429 对相应 Transport 熔断 5 分钟。
 - 搜索 Chromedp client 默认最多 2 个并发 tab，正文 Chromedp client 默认最多 3 个并发 tab。
@@ -396,6 +398,7 @@ SSRF 防护会拒绝私网、回环、link-local、CGNAT、Metadata、组播、�
 | `SEARCH_CHROME_PATH` | 空 | Chrome/Chromium 可执行文件 |
 | `SEARCH_CHROME_HEADLESS` | `true` | 是否无头运行 |
 | `SEARCH_CHROME_NO_SANDBOX` | `false` | Docker 中可设为 `true` |
+| `SEARCH_USER_AGENT` | 本机 Chrome 150 desktop UA | Header Profile Pool 的 Chromium UA 基线；部署时应与实际 Chrome 主版本保持一致 |
 | `SEARCH_TOTAL_TIMEOUT` | `20s` | 整体请求超时 |
 | `SEARCH_CONTENT_TIMEOUT` | `30s` | 组合搜索与正文读取的整体请求超时 |
 | `SEARCH_DESKTOP_TIMEOUT` | `4s` | Desktop HTTP 超时 |
@@ -455,3 +458,31 @@ make check
 - 免费、固定搜索源精确排名、无人值守高可用无法同时得到保证；本 Demo 对不可用情况返回明确、可诊断的结构化结果。
 - Read API 不破解验证码、登录、付费墙或访问控制，不携带调用方 Cookie/Authorization，不递归抓取链接。
 - 第一阶段不解析 PDF、Office、图片或 OCR，也不保证 Readability 能从任意网页提取出有效正文。
+
+## Header Profile Pool 设计与 Bing 诊断
+
+Profile 的选择键优先使用 `request_id`，缺失时使用 query 的稳定 hash；因此同一逻辑请求会复用同一 profile。Pool 已接入 Baidu HTTP、DuckDuckGo HTTP、Baidu/Bing/Brave Chromedp 和正文 browser reader。授权 Debug 响应的 `attempts[*].header_profile` 可用于按 profile 聚合成功率。
+
+Chromedp 在导航前通过 CDP 同时设置 User-Agent、语言、平台、UA Client Hints、额外请求头和 viewport。不要从互联网上收集大量陈旧 UA 随机轮换；少量、可验证且和实际 Chromium 版本一致的 profile 更容易诊断，也不会制造互相矛盾的浏览器信号。
+
+Bing HTTP 200 不代表一定是结果页。Bing 可能在正常 `/search` URL 和正常页面标题下嵌入 Cloudflare Turnstile。检测器会识别 `turnstile-widget`、Turnstile script 和 `/challenge/verify` 特征，并返回：
+
+```json
+{
+  "error": {
+    "code": "captcha_required",
+    "message": "Bing 返回安全验证页面",
+    "retryable": true
+  },
+  "debug": {
+    "attempts": [{
+      "transport": "bing_chromedp",
+      "header_profile": "chrome_desktop_secondary",
+      "http_status": 200,
+      "classification": "captcha"
+    }]
+  }
+}
+```
+
+这类结果不是 Parser DOM 漂移。只有既不是 CAPTCHA/限流/网络错误、又找不到有效结果结构时，才返回 `upstream_changed`。Header Profile Pool 可降低不一致指纹和便于分桶观测，但无法解决 IP reputation、请求突发、Cookie 状态或搜索引擎策略导致的 challenge。

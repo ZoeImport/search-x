@@ -55,7 +55,7 @@ func TestBuildSearchURL(t *testing.T) {
 func TestProviderReturnsParsedResults(t *testing.T) {
 	provider, err := New(fakeTransport{response: transport.Response{
 		RequestURL: "https://www.bing.com/search?q=go", FinalURL: "https://www.bing.com/search?q=go",
-		StatusCode: 200, Body: fixture(t, "normal.html"),
+		StatusCode: 200, Body: fixture(t, "normal.html"), HeaderProfile: "chrome_macos_150",
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -72,6 +72,9 @@ func TestProviderReturnsParsedResults(t *testing.T) {
 	if got.Debug == nil || len(got.Debug.Attempts) != 1 || got.Debug.Attempts[0].Provider != domain.ProviderNameBing {
 		t.Fatalf("debug=%+v", got.Debug)
 	}
+	if got.Debug.Attempts[0].HeaderProfile != "chrome_macos_150" {
+		t.Fatalf("header_profile=%q", got.Debug.Attempts[0].HeaderProfile)
+	}
 }
 
 func TestProviderClassifiesCaptcha(t *testing.T) {
@@ -86,6 +89,24 @@ func TestProviderClassifiesCaptcha(t *testing.T) {
 	var searchErr *domain.SearchError
 	if !errors.As(gotErr, &searchErr) || searchErr.Code != domain.ErrCaptchaRequired {
 		t.Fatalf("error=%T %+v", gotErr, gotErr)
+	}
+}
+
+func TestProviderClassifiesTurnstileChallengeWithoutChallengeURL(t *testing.T) {
+	provider, err := New(fakeTransport{response: transport.Response{
+		RequestURL: "https://www.bing.com/search?q=go", FinalURL: "https://www.bing.com/search?q=go",
+		StatusCode: 200, Body: fixture(t, "turnstile.html"),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, gotErr := provider.Search(context.Background(), domain.SearchRequest{Query: "go", Limit: 10, Page: 1})
+	var searchErr *domain.SearchError
+	if !errors.As(gotErr, &searchErr) || searchErr.Code != domain.ErrCaptchaRequired {
+		t.Fatalf("error=%T %+v", gotErr, gotErr)
+	}
+	if len(searchErr.Attempts) != 1 || searchErr.Attempts[0].Classification != "captcha" {
+		t.Fatalf("attempts=%+v", searchErr.Attempts)
 	}
 }
 

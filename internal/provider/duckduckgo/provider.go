@@ -13,6 +13,7 @@ import (
 
 	"web-search-backend/internal/detector"
 	"web-search-backend/internal/domain"
+	"web-search-backend/internal/headerprofile"
 )
 
 const defaultMaxBodyBytes int64 = 4 << 20
@@ -27,6 +28,8 @@ type Config struct {
 	Timeout time.Duration
 	// MaxBodyBytes limits the response body read into memory.
 	MaxBodyBytes int64
+	// HeaderProfiles selects a sticky outbound request profile.
+	HeaderProfiles headerprofile.Pool
 }
 
 // Provider searches DuckDuckGo's public HTML result page.
@@ -78,13 +81,32 @@ func (p *Provider) Search(ctx context.Context, request domain.SearchRequest) (do
 	httpRequest.Header.Set("User-Agent", p.config.UserAgent)
 	httpRequest.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	httpRequest.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.7")
+	selectedProfile := ""
+	if p.config.HeaderProfiles != nil {
+		key := request.RequestID
+		if key == "" {
+			key = request.Query
+		}
+		profile, selectErr := p.config.HeaderProfiles.Select(key, 0)
+		if selectErr != nil {
+			attempt := domain.Attempt{Provider: p.Name(), Transport: domain.TransportNameDuckDuckGoHTTP, RequestURL: requestURL}
+			attempt.OriginalError = selectErr.Error()
+			return domain.SearchResponse{}, searchError(domain.ErrProviderUnavailable, true, fmt.Errorf("select DuckDuckGo header profile: %w", selectErr), attempt)
+		}
+		selectedProfile = string(profile.Name)
+		httpRequest.Header.Set("User-Agent", profile.UserAgent)
+		httpRequest.Header.Set("Accept-Language", profile.AcceptLanguage)
+		for key, value := range profile.Headers {
+			httpRequest.Header.Set(key, value)
+		}
+	}
 
 	started := time.Now()
 	httpResponse, err := p.client.Do(httpRequest)
 	elapsed := time.Since(started)
 	attempt := domain.Attempt{
 		Provider: p.Name(), Transport: domain.TransportNameDuckDuckGoHTTP,
-		RequestURL: requestURL, ElapsedMS: elapsed.Milliseconds(),
+		RequestURL: requestURL, ElapsedMS: elapsed.Milliseconds(), HeaderProfile: selectedProfile,
 	}
 	if err != nil {
 		code := domain.ErrProviderUnavailable

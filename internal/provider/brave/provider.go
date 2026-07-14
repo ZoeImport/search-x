@@ -50,7 +50,8 @@ func (provider *Provider) Search(ctx context.Context, request domain.SearchReque
 	response, fetchErr := provider.browser.Fetch(ctx, request)
 	attempt := domain.Attempt{
 		Provider: provider.Name(), Transport: domain.TransportNameBraveChromedp,
-		RequestURL: response.RequestURL, HTTPStatus: response.StatusCode, FinalURL: response.FinalURL,
+		HeaderProfile: response.HeaderProfile,
+		RequestURL:    response.RequestURL, HTTPStatus: response.StatusCode, FinalURL: response.FinalURL,
 		ElapsedMS: response.Elapsed.Milliseconds(),
 	}
 	artifactPaths, artifactWarnings := provider.saveArtifacts(request, response)

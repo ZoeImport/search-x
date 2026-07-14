@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"web-search-backend/internal/domain"
+	"web-search-backend/internal/headerprofile"
 	"web-search-backend/internal/transport"
 )
 
@@ -23,6 +24,8 @@ type Config struct {
 	Referer      string
 	Timeout      time.Duration
 	MaxBodyBytes int64
+	// HeaderProfiles overrides static request headers with a sticky profile.
+	HeaderProfiles headerprofile.Pool
 }
 
 type Client struct {
@@ -70,9 +73,22 @@ func (c *Client) Fetch(ctx context.Context, request domain.SearchRequest) (trans
 	if err != nil {
 		return transport.Response{RequestURL: requestURL}, fmt.Errorf("create %s request: %w", c.Name(), err)
 	}
+	response := transport.Response{RequestURL: requestURL}
 	httpRequest.Header.Set("User-Agent", c.config.UserAgent)
 	httpRequest.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
 	httpRequest.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.7")
+	if c.config.HeaderProfiles != nil {
+		profile, selectErr := c.config.HeaderProfiles.Select(profileKey(request), 0)
+		if selectErr != nil {
+			return response, fmt.Errorf("select %s header profile: %w", c.Name(), selectErr)
+		}
+		response.HeaderProfile = string(profile.Name)
+		httpRequest.Header.Set("User-Agent", profile.UserAgent)
+		httpRequest.Header.Set("Accept-Language", profile.AcceptLanguage)
+		for key, value := range profile.Headers {
+			httpRequest.Header.Set(key, value)
+		}
+	}
 	if c.config.Referer != "" {
 		httpRequest.Header.Set("Referer", c.config.Referer)
 	}
@@ -81,17 +97,16 @@ func (c *Client) Fetch(ctx context.Context, request domain.SearchRequest) (trans
 	httpResponse, err := c.client.Do(httpRequest)
 	elapsed := time.Since(started)
 	if err != nil {
-		return transport.Response{RequestURL: requestURL, Elapsed: elapsed}, fmt.Errorf("%s request: %w", c.Name(), err)
+		response.Elapsed = elapsed
+		return response, fmt.Errorf("%s request: %w", c.Name(), err)
 	}
 	defer httpResponse.Body.Close()
 
-	response := transport.Response{
-		RequestURL: requestURL,
-		StatusCode: httpResponse.StatusCode,
-		FinalURL:   httpResponse.Request.URL.String(),
-		Headers:    httpResponse.Header.Clone(),
-		Elapsed:    elapsed,
-	}
+	response.RequestURL = requestURL
+	response.StatusCode = httpResponse.StatusCode
+	response.FinalURL = httpResponse.Request.URL.String()
+	response.Headers = httpResponse.Header.Clone()
+	response.Elapsed = elapsed
 	limited, err := io.ReadAll(io.LimitReader(httpResponse.Body, c.config.MaxBodyBytes+1))
 	if err != nil {
 		return response, fmt.Errorf("read %s response: %w", c.Name(), err)
@@ -102,6 +117,13 @@ func (c *Client) Fetch(ctx context.Context, request domain.SearchRequest) (trans
 	}
 	response.Body = limited
 	return response, nil
+}
+
+func profileKey(request domain.SearchRequest) string {
+	if request.RequestID != "" {
+		return request.RequestID
+	}
+	return request.Query
 }
 
 func (c *Client) buildURL(request domain.SearchRequest) (string, error) {

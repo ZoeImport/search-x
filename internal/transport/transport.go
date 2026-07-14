@@ -10,12 +10,14 @@ import (
 
 type Response struct {
 	RequestURL string
-	StatusCode int
-	FinalURL   string
-	Headers    http.Header
-	Body       []byte
-	Screenshot []byte
-	Elapsed    time.Duration
+	// HeaderProfile records the non-sensitive profile name selected for this request.
+	HeaderProfile string
+	StatusCode    int
+	FinalURL      string
+	Headers       http.Header
+	Body          []byte
+	Screenshot    []byte
+	Elapsed       time.Duration
 }
 
 type SearchTransport interface {

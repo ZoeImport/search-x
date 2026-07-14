@@ -94,11 +94,12 @@ func (p *Provider) Search(ctx context.Context, request domain.SearchRequest) (do
 
 		response, fetchErr := current.Fetch(ctx, request)
 		attempt := domain.Attempt{
-			Transport:  current.Name(),
-			RequestURL: response.RequestURL,
-			HTTPStatus: response.StatusCode,
-			FinalURL:   response.FinalURL,
-			ElapsedMS:  response.Elapsed.Milliseconds(),
+			Transport:     current.Name(),
+			HeaderProfile: response.HeaderProfile,
+			RequestURL:    response.RequestURL,
+			HTTPStatus:    response.StatusCode,
+			FinalURL:      response.FinalURL,
+			ElapsedMS:     response.Elapsed.Milliseconds(),
 		}
 		if request.Debug && p.artifacts != nil {
 			attempt.BodyPreview, attempt.BodySHA256 = p.artifacts.Preview(response.Body)

@@ -101,7 +101,7 @@ func Load() (Config, error) {
 		DuckDuckGoURL:        "https://html.duckduckgo.com/html/",
 		BingURL:              "https://www.bing.com/search",
 		BraveURL:             "https://search.brave.com/search",
-		UserAgent:            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0 Safari/537.36",
+		UserAgent:            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7871.115 Safari/537.36",
 		TotalTimeout:         20 * time.Second,
 		ContentTimeout:       30 * time.Second,
 		DesktopTimeout:       4 * time.Second,

@@ -58,7 +58,7 @@ func TestProviderFallsBackAndPreservesAttempts(t *testing.T) {
 	desktopCalls, mobileCalls := 0, 0
 	transports := []transport.SearchTransport{
 		fakeTransport{name: "desktop_http", calls: &desktopCalls, response: transport.Response{StatusCode: 429, FinalURL: "https://www.baidu.com/s", Headers: http.Header{}, Body: []byte("limited")}},
-		fakeTransport{name: "mobile_http", calls: &mobileCalls, response: transport.Response{StatusCode: 200, FinalURL: "https://m.baidu.com/s", Headers: http.Header{}, Body: fixture(t, "mobile_normal.html")}},
+		fakeTransport{name: "mobile_http", calls: &mobileCalls, response: transport.Response{StatusCode: 200, FinalURL: "https://m.baidu.com/s", Headers: http.Header{}, Body: fixture(t, "mobile_normal.html"), HeaderProfile: "chrome_desktop_secondary"}},
 	}
 	artifacts := &fakeArtifacts{}
 	p := NewProvider(transports, artifacts, NewBreaker(time.Now), nil)
@@ -74,6 +74,9 @@ func TestProviderFallsBackAndPreservesAttempts(t *testing.T) {
 	}
 	if got.Debug.Attempts[0].Classification != "rate_limited" || got.Debug.Attempts[0].HTTPStatus != 429 {
 		t.Fatalf("attempt=%#v", got.Debug.Attempts[0])
+	}
+	if got.Debug.Attempts[1].HeaderProfile != "chrome_desktop_secondary" {
+		t.Fatalf("header_profile=%q", got.Debug.Attempts[1].HeaderProfile)
 	}
 }
 

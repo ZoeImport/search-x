@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"web-search-backend/internal/domain"
+	"web-search-backend/internal/headerprofile"
 )
 
 func TestClientFetchPreservesRawResponseAndQuery(t *testing.T) {
@@ -67,6 +68,43 @@ func TestClientFetchRejectsOversizedBodyAndReturnsPartialResponse(t *testing.T) 
 	}
 	if len(got.Body) != 64 || got.StatusCode != http.StatusOK {
 		t.Fatalf("response=%#v", got)
+	}
+}
+
+func TestClientFetchUsesStickyHeaderProfile(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("User-Agent"); got != "pooled-agent" {
+			t.Fatalf("user-agent=%q", got)
+		}
+		if got := r.Header.Get("Accept-Language"); got != "en-US,en;q=0.9" {
+			t.Fatalf("accept-language=%q", got)
+		}
+		if got := r.Header.Get("X-Test-Profile"); got != "profile-value" {
+			t.Fatalf("x-test-profile=%q", got)
+		}
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer server.Close()
+	pool, err := headerprofile.NewStaticPool([]headerprofile.Profile{{
+		Name: "pooled", UserAgent: "pooled-agent", AcceptLanguage: "en-US,en;q=0.9",
+		Headers: map[string]string{"Accept": "text/html", "X-Test-Profile": "profile-value"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := New(Config{
+		Name: "desktop_http", BaseURL: server.URL, Timeout: time.Second,
+		MaxBodyBytes: 1024, HeaderProfiles: pool,
+	}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := client.Fetch(context.Background(), domain.SearchRequest{RequestID: "request-1", Query: "go", Limit: 10, Page: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.HeaderProfile != "pooled" {
+		t.Fatalf("header profile=%q", got.HeaderProfile)
 	}
 }
 

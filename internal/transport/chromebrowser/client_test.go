@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"web-search-backend/internal/domain"
+	"web-search-backend/internal/headerprofile"
 )
 
 func TestNewRejectsMissingProfileDir(t *testing.T) {
@@ -65,6 +66,31 @@ func TestNewUsesConfiguredTabCapacity(t *testing.T) {
 	defer client.Close()
 	if cap(client.semaphore) != 3 {
 		t.Fatalf("tab capacity = %d", cap(client.semaphore))
+	}
+}
+
+func TestClientSelectsStickyHeaderProfile(t *testing.T) {
+	pool, err := headerprofile.NewStaticPool([]headerprofile.Profile{{
+		Name: "browser-profile", UserAgent: "browser-agent", AcceptLanguage: "zh-CN",
+		Platform: "MacIntel", ViewportWidth: 1440, ViewportHeight: 900, DeviceScaleFactor: 2,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := New(Config{
+		ProfileDir: t.TempDir(), Timeout: 10 * time.Second, Headless: true,
+		HeaderProfiles: pool,
+	}, testURLBuilder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	profile, err := client.selectHeaderProfile(domain.SearchRequest{RequestID: "request-42", Query: "go"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.Name != "browser-profile" || profile.Platform != "MacIntel" || profile.ViewportWidth != 1440 {
+		t.Fatalf("profile=%+v", profile)
 	}
 }
 

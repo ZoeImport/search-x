@@ -108,6 +108,7 @@ type Attempt struct {
 	// Provider identifies the provider that made this upstream attempt.
 	Provider        ProviderName        `json:"provider,omitempty"`
 	Transport       TransportName       `json:"transport"`
+	HeaderProfile   string              `json:"header_profile,omitempty"`
 	RequestURL      string              `json:"request_url,omitempty"`
 	HTTPStatus      int                 `json:"http_status,omitempty"`
 	FinalURL        string              `json:"final_url,omitempty"`

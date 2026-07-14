@@ -8,10 +8,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 
 	"web-search-backend/internal/domain"
+	"web-search-backend/internal/headerprofile"
 	"web-search-backend/internal/transport"
 )
 
@@ -29,6 +31,8 @@ type Config struct {
 	Headless       bool
 	DisableSandbox bool
 	MaxBodyBytes   int
+	// HeaderProfiles selects a coherent, sticky request identity per logical request.
+	HeaderProfiles headerprofile.Pool
 }
 
 type Client struct {
@@ -106,7 +110,7 @@ func (c *Client) Fetch(ctx context.Context, request domain.SearchRequest) (trans
 	if err != nil {
 		return transport.Response{}, err
 	}
-	return c.fetchURL(ctx, requestURL)
+	return c.fetchURL(ctx, requestURL, request)
 }
 
 // FetchURL renders an already constructed URL and returns the final DOM.
@@ -114,10 +118,10 @@ func (c *Client) FetchURL(ctx context.Context, requestURL string) (transport.Res
 	if strings.TrimSpace(requestURL) == "" {
 		return transport.Response{}, fmt.Errorf("chromedp request URL is empty")
 	}
-	return c.fetchURL(ctx, requestURL)
+	return c.fetchURL(ctx, requestURL, domain.SearchRequest{Query: requestURL})
 }
 
-func (c *Client) fetchURL(ctx context.Context, requestURL string) (transport.Response, error) {
+func (c *Client) fetchURL(ctx context.Context, requestURL string, request domain.SearchRequest) (transport.Response, error) {
 	response := transport.Response{RequestURL: requestURL}
 	select {
 	case c.semaphore <- struct{}{}:
@@ -140,7 +144,17 @@ func (c *Client) fetchURL(ctx context.Context, requestURL string) (transport.Res
 	defer operationCancel()
 	started := time.Now()
 
-	if err := chromedp.Run(operationCtx, network.Enable(), chromedp.Navigate(requestURL)); err != nil {
+	actions := chromedp.Tasks{network.Enable()}
+	if c.config.HeaderProfiles != nil {
+		profile, err := c.selectHeaderProfile(request, 0)
+		if err != nil {
+			return response, fmt.Errorf("select chromedp header profile: %w", err)
+		}
+		response.HeaderProfile = string(profile.Name)
+		actions = append(actions, profileActions(profile)...)
+	}
+	actions = append(actions, chromedp.Navigate(requestURL))
+	if err := chromedp.Run(operationCtx, actions); err != nil {
 		response.Elapsed = time.Since(started)
 		c.captureBestEffort(operationCtx, &response)
 		return response, fmt.Errorf("chromedp navigate: %w", err)
@@ -170,6 +184,63 @@ func (c *Client) fetchURL(ctx context.Context, requestURL string) (transport.Res
 		return response, fmt.Errorf("chromedp response body exceeds %d bytes", c.config.MaxBodyBytes)
 	}
 	return response, nil
+}
+
+func (c *Client) selectHeaderProfile(request domain.SearchRequest, attempt int) (headerprofile.Profile, error) {
+	if c.config.HeaderProfiles == nil {
+		return headerprofile.Profile{}, fmt.Errorf("chromedp header profile pool is nil")
+	}
+	key := request.RequestID
+	if key == "" {
+		key = request.Query
+	}
+	return c.config.HeaderProfiles.Select(key, attempt)
+}
+
+func profileActions(profile headerprofile.Profile) chromedp.Tasks {
+	userAgentAction := emulation.SetUserAgentOverride(profile.UserAgent).
+		WithAcceptLanguage(profile.AcceptLanguage).
+		WithPlatform(profile.Platform)
+	if profile.ClientHints != nil {
+		userAgentAction = userAgentAction.WithUserAgentMetadata(toUserAgentMetadata(profile.ClientHints))
+	}
+	actions := chromedp.Tasks{userAgentAction}
+	if len(profile.Headers) > 0 {
+		headers := make(network.Headers, len(profile.Headers))
+		for key, value := range profile.Headers {
+			headers[key] = value
+		}
+		actions = append(actions, network.SetExtraHTTPHeaders(headers))
+	}
+	if profile.ViewportWidth > 0 && profile.ViewportHeight > 0 {
+		scale := profile.DeviceScaleFactor
+		if scale <= 0 {
+			scale = 1
+		}
+		actions = append(actions, emulation.SetDeviceMetricsOverride(
+			profile.ViewportWidth, profile.ViewportHeight, scale, false,
+		))
+	}
+	return actions
+}
+
+func toUserAgentMetadata(hints *headerprofile.ClientHints) *emulation.UserAgentMetadata {
+	if hints == nil {
+		return nil
+	}
+	return &emulation.UserAgentMetadata{
+		Brands: toBrandVersions(hints.Brands), FullVersionList: toBrandVersions(hints.FullVersionList),
+		Platform: hints.Platform, PlatformVersion: hints.PlatformVersion,
+		Architecture: hints.Architecture, Model: hints.Model, Mobile: hints.Mobile, Bitness: hints.Bitness,
+	}
+}
+
+func toBrandVersions(brands []headerprofile.BrandVersion) []*emulation.UserAgentBrandVersion {
+	converted := make([]*emulation.UserAgentBrandVersion, 0, len(brands))
+	for _, brand := range brands {
+		converted = append(converted, &emulation.UserAgentBrandVersion{Brand: brand.Brand, Version: brand.Version})
+	}
+	return converted
 }
 
 func (c *Client) ensureBrowser() error {

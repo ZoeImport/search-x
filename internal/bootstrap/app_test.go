@@ -46,7 +46,8 @@ func TestNewBuildsEndToEndOfflineSearchApp(t *testing.T) {
 	cfg := config.Config{
 		Debug: true, DebugDir: filepath.Join(temp, "debug"), DebugPreviewBytes: 32 * 1024,
 		ChromeProfileDir: filepath.Join(temp, "profile"), BingProfileDir: filepath.Join(temp, "bing-profile"), BraveProfileDir: filepath.Join(temp, "brave-profile"), ChromeHeadless: true,
-		DesktopURL: upstream.URL, MobileURL: upstream.URL, UserAgent: "test-agent",
+		DesktopURL: upstream.URL, MobileURL: upstream.URL,
+		UserAgent:     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7871.115 Safari/537.36",
 		DuckDuckGoURL: upstream.URL, BingURL: "https://www.bing.com/search", BraveURL: "https://search.brave.com/search",
 		TotalTimeout: 2 * time.Second, DesktopTimeout: time.Second, MobileTimeout: time.Second, ChromeTimeout: time.Second,
 		DuckDuckGoTimeout: time.Second, BingTimeout: time.Second, BraveTimeout: time.Second, ProviderBrowserSlots: 2,

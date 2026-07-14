@@ -50,7 +50,8 @@ func (p *Provider) Search(ctx context.Context, request domain.SearchRequest) (do
 	response, fetchErr := p.browser.Fetch(ctx, request)
 	attempt := domain.Attempt{
 		Provider: p.Name(), Transport: domain.TransportNameBingChromedp,
-		RequestURL: response.RequestURL, HTTPStatus: response.StatusCode, FinalURL: response.FinalURL,
+		HeaderProfile: response.HeaderProfile,
+		RequestURL:    response.RequestURL, HTTPStatus: response.StatusCode, FinalURL: response.FinalURL,
 		ElapsedMS: response.Elapsed.Milliseconds(),
 	}
 	artifactPaths, artifactWarnings := p.saveArtifacts(request, response)
@@ -129,6 +130,9 @@ func isCaptcha(finalURL string, body []byte) bool {
 	lowerBody := strings.ToLower(string(body))
 	return strings.Contains(path, "captcha") || strings.Contains(path, "challenge") ||
 		strings.Contains(lowerBody, "id=\"b_captcha\"") ||
+		strings.Contains(lowerBody, "id=\"turnstile-widget\"") ||
+		strings.Contains(lowerBody, "challenges.cloudflare.com/turnstile") ||
+		strings.Contains(lowerBody, "\"verifyendpoint\":\"https://www.bing.com/challenge/verify") ||
 		strings.Contains(lowerBody, "verify you are human")
 }
 

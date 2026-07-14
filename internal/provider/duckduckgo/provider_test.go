@@ -9,14 +9,22 @@ import (
 	"time"
 
 	"web-search-backend/internal/domain"
+	"web-search-backend/internal/headerprofile"
 )
 
 func TestProviderFetchesQueryAndPagination(t *testing.T) {
+	headerProfiles, err := headerprofile.NewStaticPool([]headerprofile.Profile{{
+		Name: "ddg-profile", UserAgent: "ddg-agent", AcceptLanguage: "en-US,en;q=0.9",
+		Headers: map[string]string{"Accept": "text/html", "X-Profile": "selected"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.URL.Query().Get("q") != "go language" || request.URL.Query().Get("s") != "10" {
 			t.Errorf("query=%s", request.URL.RawQuery)
 		}
-		if request.Header.Get("User-Agent") == "" || request.Header.Get("Accept") == "" {
+		if request.Header.Get("User-Agent") != "ddg-agent" || request.Header.Get("X-Profile") != "selected" {
 			t.Errorf("headers=%v", request.Header)
 		}
 		response.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -24,7 +32,7 @@ func TestProviderFetchesQueryAndPagination(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider, err := New(Config{BaseURL: server.URL, Timeout: time.Second, MaxBodyBytes: 1 << 20}, server.Client())
+	provider, err := New(Config{BaseURL: server.URL, Timeout: time.Second, MaxBodyBytes: 1 << 20, HeaderProfiles: headerProfiles}, server.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,6 +47,9 @@ func TestProviderFetchesQueryAndPagination(t *testing.T) {
 	}
 	if got.Debug == nil || len(got.Debug.Attempts) != 1 || got.Debug.Attempts[0].HTTPStatus != http.StatusOK {
 		t.Fatalf("debug=%+v", got.Debug)
+	}
+	if got.Debug.Attempts[0].HeaderProfile != "ddg-profile" {
+		t.Fatalf("header_profile=%q", got.Debug.Attempts[0].HeaderProfile)
 	}
 }
 

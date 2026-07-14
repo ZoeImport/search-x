@@ -16,6 +16,7 @@ import (
 	"web-search-backend/internal/config"
 	"web-search-backend/internal/debugartifact"
 	"web-search-backend/internal/domain"
+	"web-search-backend/internal/headerprofile"
 	"web-search-backend/internal/provider"
 	"web-search-backend/internal/provider/baidu"
 	"web-search-backend/internal/provider/bing"
@@ -44,6 +45,10 @@ type App struct {
 
 // New assembles the search and optional read pipelines.
 func New(config config.Config) (*App, error) {
+	headerProfiles, err := headerprofile.NewChromiumDesktopPool(config.UserAgent)
+	if err != nil {
+		return nil, fmt.Errorf("create header profile pool: %w", err)
+	}
 	artifactStore, err := debugartifact.New(config.DebugDir, config.DebugPreviewBytes)
 	if err != nil {
 		return nil, err
@@ -61,21 +66,21 @@ func New(config config.Config) (*App, error) {
 
 	desktopClient, err := httpsearch.New(httpsearch.Config{
 		Name: domain.TransportNameDesktopHTTP, BaseURL: config.DesktopURL, Referer: origin(config.DesktopURL),
-		UserAgent: config.UserAgent, Timeout: config.DesktopTimeout, MaxBodyBytes: config.MaxBodyBytes,
+		UserAgent: config.UserAgent, Timeout: config.DesktopTimeout, MaxBodyBytes: config.MaxBodyBytes, HeaderProfiles: headerProfiles,
 	}, baiduHTTPClient)
 	if err != nil {
 		return nil, fmt.Errorf("create desktop transport: %w", err)
 	}
 	mobileClient, err := httpsearch.New(httpsearch.Config{
 		Name: domain.TransportNameMobileHTTP, BaseURL: config.MobileURL, Referer: origin(config.MobileURL),
-		UserAgent: config.UserAgent, Timeout: config.MobileTimeout, MaxBodyBytes: config.MaxBodyBytes,
+		UserAgent: config.UserAgent, Timeout: config.MobileTimeout, MaxBodyBytes: config.MaxBodyBytes, HeaderProfiles: headerProfiles,
 	}, baiduHTTPClient)
 	if err != nil {
 		return nil, fmt.Errorf("create mobile transport: %w", err)
 	}
 	duckDuckGoProvider, err := duckduckgo.New(duckduckgo.Config{
 		BaseURL: config.DuckDuckGoURL, UserAgent: config.UserAgent,
-		Timeout: config.DuckDuckGoTimeout, MaxBodyBytes: config.MaxBodyBytes,
+		Timeout: config.DuckDuckGoTimeout, MaxBodyBytes: config.MaxBodyBytes, HeaderProfiles: headerProfiles,
 	}, duckDuckGoHTTPClient)
 	if err != nil {
 		return nil, fmt.Errorf("create DuckDuckGo provider: %w", err)
@@ -84,6 +89,7 @@ func New(config config.Config) (*App, error) {
 		ProfileDir: config.ChromeProfileDir, ExecPath: config.ChromePath,
 		Timeout: config.ChromeTimeout, Headless: config.ChromeHeadless, DisableSandbox: config.ChromeNoSandbox,
 		MaxBodyBytes: int(config.MaxBodyBytes), MaxConcurrentTabs: config.ProviderBrowserSlots,
+		HeaderProfiles: headerProfiles,
 	}, func(request domain.SearchRequest) (string, error) {
 		return baidu.BuildSearchURL(config.DesktopURL, request)
 	})
@@ -94,6 +100,7 @@ func New(config config.Config) (*App, error) {
 		ProfileDir: config.BingProfileDir, ExecPath: config.ChromePath,
 		Timeout: config.BingTimeout, Headless: config.ChromeHeadless, DisableSandbox: config.ChromeNoSandbox,
 		MaxBodyBytes: int(config.MaxBodyBytes), MaxConcurrentTabs: config.ProviderBrowserSlots,
+		HeaderProfiles: headerProfiles,
 	}, func(request domain.SearchRequest) (string, error) {
 		return bing.BuildSearchURL(config.BingURL, request)
 	})
@@ -105,6 +112,7 @@ func New(config config.Config) (*App, error) {
 		ProfileDir: config.BraveProfileDir, ExecPath: config.ChromePath,
 		Timeout: config.BraveTimeout, Headless: config.ChromeHeadless, DisableSandbox: config.ChromeNoSandbox,
 		MaxBodyBytes: int(config.MaxBodyBytes), MaxConcurrentTabs: config.ProviderBrowserSlots,
+		HeaderProfiles: headerProfiles,
 	}, func(request domain.SearchRequest) (string, error) {
 		return brave.BuildSearchURL(config.BraveURL, request)
 	})
@@ -190,6 +198,7 @@ func New(config config.Config) (*App, error) {
 				Timeout: config.ReadBrowserTimeout, PostLoadWait: config.ReadBrowserWait,
 				Headless: config.ChromeHeadless, DisableSandbox: config.ChromeNoSandbox,
 				MaxBodyBytes: int(config.ReadMaxBodyBytes), MaxConcurrentTabs: config.ReadBrowserSlots,
+				HeaderProfiles: headerProfiles,
 			}, func(request domain.SearchRequest) (string, error) {
 				return request.Query, nil
 			})

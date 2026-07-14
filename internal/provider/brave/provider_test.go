@@ -25,7 +25,7 @@ func (stub braveTransportStub) Fetch(context.Context, domain.SearchRequest) (tra
 func TestProviderReturnsParsedResults(t *testing.T) {
 	provider, err := New(braveTransportStub{response: transport.Response{
 		RequestURL: "https://search.brave.com/search?q=go", FinalURL: "https://search.brave.com/search?q=go",
-		StatusCode: 200, Body: braveFixture(t, "normal.html"),
+		StatusCode: 200, Body: braveFixture(t, "normal.html"), HeaderProfile: "chrome_desktop_primary",
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -41,6 +41,9 @@ func TestProviderReturnsParsedResults(t *testing.T) {
 	}
 	if response.Debug == nil || response.Debug.Attempts[0].Provider != domain.ProviderNameBrave {
 		t.Fatalf("debug=%+v", response.Debug)
+	}
+	if response.Debug.Attempts[0].HeaderProfile != "chrome_desktop_primary" {
+		t.Fatalf("header_profile=%q", response.Debug.Attempts[0].HeaderProfile)
 	}
 }
 
