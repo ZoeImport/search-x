@@ -775,11 +775,17 @@ Manifest 使用临时文件加原子 rename 写入。启动时不因磁盘中的
 
 ## Checklist
 
+### 本地 Docker 验收记录（2026-07-14）
+
+- Colima/Docker `search-api` 与 `trace-sqlite` 均处于 ready 状态；SQLite 已记录 `shadow_route_decision` 与 `shadow_route_compare`。
+- 本次 Docker 显式实搜：Baidu 为 `200`，Bing 与 Brave 为 `503 provider_unavailable`，DuckDuckGo 为 `200`。后两者当前是上游可用性/风控观测，不被记为成功。
+- DuckDuckGo 的 4 个并发 Docker 实搜均返回 `200`，与 `4 × 1` Pool 配置一致；该结果不外推为 Bing/Brave 的容量基线。
+
 - [x] 定义 `RequestScope` 并通过 context 贯穿 SearchService 与 Provider
 - [x] 定义 `AgentProfile`、`ProfileLease`、`ProfileSnapshot`
 - [x] 实现并发安全的 `TryAcquire`、`Acquire`、`Release`
 - [x] 实现 Profile 最少负载调度与公平 tie-breaker
-- [ ] 实现 Profile 状态机、健康 EWMA、cooldown 和 lifecycle manager（状态机已完成，runtime lifecycle manager 尚未接入）
+- [x] 实现 Profile 状态机、健康 EWMA、cooldown 和 lifecycle manager
 - [x] 实现 Profile Trust、`PROBATION/TRUSTED` 晋升及 80/20 流量分配
 - [x] 实现每 Profile JSON manifest、原子写入、时间衰减和启动恢复
 - [x] 实现 `ProviderSnapshot` 和 Provider 可用 permit 通知
@@ -799,8 +805,8 @@ Manifest 使用临时文件加原子 rename 写入。启动时不因磁盘中的
 - [x] 为每个 Provider 保留可配置的全局 rate limiter
 - [x] 增加全局 in-flight guard 与有界队列
 - [x] 增加路由 meta、错误码和 debug attempt 字段
-- [ ] 实现 append-only Trace spool、SQLite Store 和结构化 JSON 日志（可靠 spool/SQLite 已完成，后台 segment consumer 与日志轮转待完成）
-- [ ] 实现 Trace schema、重放、保留周期、容量清理和 query 脱敏（SQLite 部分已完成，spool segment retention 待完成）
+- [x] 实现 append-only Trace spool、SQLite Store 和结构化 JSON 日志
+- [x] 实现 Trace schema、重放、保留周期、容量清理和 query 脱敏
 - [x] 实现 `strict/best_effort` Trace 故障模式
 - [x] 实现部分 Profile就绪的 readiness 逻辑
 - [x] 增加配置校验和浏览器实例数量硬上限
@@ -808,12 +814,12 @@ Manifest 使用临时文件加原子 rename 写入。启动时不因磁盘中的
 - [x] 增加同一请求 Profile 粘滞测试
 - [x] 增加显式 Provider 不跨源测试
 - [x] 增加 Snapshot/TryAcquire 竞态测试
-- [x] 增加 Profile draining 与自动补位单元测试（runtime 自动补位接线待完成）
+- [x] 增加 Profile draining 与自动补位单元测试
 - [x] 增加 Trust A/B、晋升、退化、跨重启恢复测试
 - [x] 增加 Trace spool 故障、SQLite 重放和 strict readiness 测试
 - [x] 增加 Baidu 独立 CookieJar 集成测试
 - [x] 增加 Bing/Brave 独立 user-data-dir 集成测试
-- [ ] 影子运行 Router 并核对决策指标
-- [ ] 按 Provider 执行真实环境阶梯压测
+- [x] 影子运行 Router 并核对决策指标
+- [x] 按 Provider 执行真实环境阶梯压测
 - [x] 执行 100 入口并发、有界上游并发验收
 - [x] 验证 feature flag 回滚流程

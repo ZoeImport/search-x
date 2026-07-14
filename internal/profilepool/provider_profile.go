@@ -22,6 +22,23 @@ type ProviderProfile struct {
 	close    func() error
 	once     sync.Once
 	closeErr error
+	recreate func() (Profile, error)
+}
+
+func NewProviderProfileWithFactory(id string, capacity int, searcher Searcher, closeFn func() error, recreate func() (Profile, error)) (*ProviderProfile, error) {
+	profile, err := NewProviderProfile(id, capacity, searcher, closeFn)
+	if err != nil {
+		return nil, err
+	}
+	profile.recreate = recreate
+	return profile, nil
+}
+
+func (profile *ProviderProfile) Recreate() (Profile, error) {
+	if profile.recreate == nil {
+		return nil, fmt.Errorf("profile %q has no recreation factory", profile.id)
+	}
+	return profile.recreate()
 }
 
 // NewProviderProfile validates and creates a provider-backed profile.

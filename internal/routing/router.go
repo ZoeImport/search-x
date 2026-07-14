@@ -65,6 +65,12 @@ func New(pools []Pool, config Config) (*Router, error) {
 func (*Router) Name() domain.ProviderName { return domain.ProviderNameAuto }
 
 func (router *Router) Search(ctx context.Context, request domain.SearchRequest) (domain.SearchResponse, error) {
+	shadowProvider := router.shadowCandidate(nil)
+	if shadowProvider != "" {
+		if err := router.trace(ctx, request, searchtrace.Event{Type: "shadow_route_decision", Provider: string(shadowProvider), Fields: map[string]any{"available_slots": router.availableSlots(shadowProvider)}}); err != nil {
+			return domain.SearchResponse{}, traceError(err)
+		}
+	}
 	attempted := make(map[domain.ProviderName]struct{}, router.config.MaxProviderAttempts)
 	var failures []error
 	var failedProviders []domain.ProviderName
@@ -77,11 +83,7 @@ func (router *Router) Search(ctx context.Context, request domain.SearchRequest) 
 				return domain.SearchResponse{}, &domain.SearchError{Code: domain.ErrSearchQueueFull, Message: "自动搜索调度队列已满", Retryable: true}
 			}
 			waitCtx, cancel := context.WithTimeout(ctx, router.config.AutoWait)
-			readyPool := router.waitAny(waitCtx, attempted)
-			if readyPool != nil {
-				lease, _ = readyPool.AcquireAuto(waitCtx, request.RequestID)
-				pool = readyPool
-			}
+			pool, lease = router.acquireAnyAuto(waitCtx, request.RequestID, attempted)
 			cancel()
 			router.queued.Add(-1)
 			if lease == nil {
@@ -93,11 +95,12 @@ func (router *Router) Search(ctx context.Context, request domain.SearchRequest) 
 		}
 		attempted[pool.Provider()] = struct{}{}
 		leaseID := fmt.Sprintf("%s-%s-%d", request.RequestID, lease.ProfileID(), len(attempted))
+		before := lease.Snapshot()
 		if err := router.trace(ctx, request, searchtrace.Event{Type: "route_decision", Provider: string(pool.Provider()), ProfileID: lease.ProfileID(), Fields: map[string]any{"route_round": len(attempted), "route_reason": domain.RouteReasonPriority}}); err != nil {
 			lease.Release(profilepool.Result{Classification: domain.ClassificationNetworkError, FinishedAt: router.config.Now()})
 			return domain.SearchResponse{}, traceError(err)
 		}
-		if err := router.trace(ctx, request, searchtrace.Event{Type: "lease_acquired", Provider: string(pool.Provider()), ProfileID: lease.ProfileID(), LeaseID: leaseID}); err != nil {
+		if err := router.trace(ctx, request, searchtrace.Event{Type: "lease_acquired", Provider: string(pool.Provider()), ProfileID: lease.ProfileID(), LeaseID: leaseID, Fields: profileTraceFields(before)}); err != nil {
 			lease.Release(profilepool.Result{Classification: domain.ClassificationNetworkError, FinishedAt: router.config.Now()})
 			return domain.SearchResponse{}, traceError(err)
 		}
@@ -108,13 +111,15 @@ func (router *Router) Search(ctx context.Context, request domain.SearchRequest) 
 			return domain.SearchResponse{}, traceError(releaseErr)
 		}
 		result := resultFor(response, err)
+		after := lease.Snapshot()
 		if traceErr := router.trace(ctx, request, searchtrace.Event{Type: "provider_attempt", Provider: string(pool.Provider()), ProfileID: lease.ProfileID(), LeaseID: leaseID, Classification: string(result.Classification), Fields: map[string]any{"result_count": len(response.Results)}}); traceErr != nil {
 			return domain.SearchResponse{}, traceError(traceErr)
 		}
-		if traceErr := router.trace(ctx, request, searchtrace.Event{Type: "lease_released", Provider: string(pool.Provider()), ProfileID: lease.ProfileID(), LeaseID: leaseID, Classification: string(result.Classification)}); traceErr != nil {
+		if traceErr := router.trace(ctx, request, searchtrace.Event{Type: "lease_released", Provider: string(pool.Provider()), ProfileID: lease.ProfileID(), LeaseID: leaseID, Classification: string(result.Classification), Fields: map[string]any{"hold_ms": router.config.Now().Sub(lease.AcquiredAt()).Milliseconds(), "trust_before": before.RecentEWMA, "trust_after": after.RecentEWMA, "generation": after.Generation, "state": after.State}}); traceErr != nil {
 			return domain.SearchResponse{}, traceError(traceErr)
 		}
 		if err == nil && len(response.Results) > 0 {
+			_ = router.trace(ctx, request, searchtrace.Event{Type: "shadow_route_compare", Provider: string(pool.Provider()), Fields: map[string]any{"predicted_provider": shadowProvider, "matched": shadowProvider == pool.Provider()}})
 			annotateDebugAttempts(&response, pool.Provider(), lease.ProfileID(), leaseID, len(attempted))
 			return router.prepareSuccess(response, lease, pool.Provider(), failedProviders), nil
 		}
@@ -130,6 +135,79 @@ func (router *Router) Search(ctx context.Context, request domain.SearchRequest) 
 	return domain.SearchResponse{}, &domain.SearchError{
 		Code: domain.ErrProviderCapacityExhausted, Message: "当前没有可用的搜索 Provider 容量", Retryable: true, Original: errors.Join(failures...),
 	}
+}
+
+func (router *Router) acquireAnyAuto(ctx context.Context, requestID string, attempted map[domain.ProviderName]struct{}) (Pool, *profilepool.Lease) {
+	waitCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type result struct {
+		pool  Pool
+		lease *profilepool.Lease
+	}
+	results := make(chan result, len(router.pools))
+	var accepted atomic.Bool
+	workers := 0
+	for _, pool := range router.pools {
+		if _, skip := attempted[pool.Provider()]; skip {
+			continue
+		}
+		workers++
+		go func(candidate Pool) {
+			lease, err := candidate.AcquireAuto(waitCtx, requestID)
+			if err != nil {
+				return
+			}
+			if waitCtx.Err() != nil || !accepted.CompareAndSwap(false, true) {
+				_ = lease.Release(profilepool.Result{Classification: domain.ClassificationNetworkError, FinishedAt: router.config.Now()})
+				return
+			}
+			select {
+			case results <- result{pool: candidate, lease: lease}:
+			case <-waitCtx.Done():
+				_ = lease.Release(profilepool.Result{Classification: domain.ClassificationNetworkError, FinishedAt: router.config.Now()})
+			}
+		}(pool)
+	}
+	if workers == 0 {
+		return nil, nil
+	}
+	select {
+	case <-ctx.Done():
+		accepted.Store(true)
+		select {
+		case late := <-results:
+			_ = late.lease.Release(profilepool.Result{Classification: domain.ClassificationNetworkError, FinishedAt: router.config.Now()})
+		default:
+		}
+		return nil, nil
+	case winner := <-results:
+		return winner.pool, winner.lease
+	}
+}
+
+func profileTraceFields(snapshot profilepool.Snapshot) map[string]any {
+	return map[string]any{"generation": snapshot.Generation, "state": snapshot.State, "trust_before": snapshot.RecentEWMA, "in_flight": snapshot.InFlight, "capacity": snapshot.Capacity}
+}
+
+func (router *Router) shadowCandidate(excluded map[domain.ProviderName]struct{}) domain.ProviderName {
+	for _, pool := range router.pools {
+		if _, skip := excluded[pool.Provider()]; skip {
+			continue
+		}
+		if pool.Snapshot().AvailableSlots > 0 {
+			return pool.Provider()
+		}
+	}
+	return ""
+}
+
+func (router *Router) availableSlots(provider domain.ProviderName) int {
+	for _, pool := range router.pools {
+		if pool.Provider() == provider {
+			return pool.Snapshot().AvailableSlots
+		}
+	}
+	return 0
 }
 
 func annotateDebugAttempts(response *domain.SearchResponse, provider domain.ProviderName, profileID, leaseID string, routeRound int) {

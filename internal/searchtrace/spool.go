@@ -72,6 +72,39 @@ func (spool *Spool) Replay(consume func(Event) error) error {
 	return scanner.Err()
 }
 
+// Consume replays and acknowledges the active segment while holding one lock,
+// preventing appends from racing between replay and truncation.
+func (spool *Spool) Consume(consume func(Event) error) error {
+	spool.mu.Lock()
+	defer spool.mu.Unlock()
+	if spool.file == nil {
+		return fmt.Errorf("trace spool is closed")
+	}
+	if _, err := spool.file.Seek(0, 0); err != nil {
+		return err
+	}
+	scanner := bufio.NewScanner(spool.file)
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	for scanner.Scan() {
+		var event Event
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			return err
+		}
+		if err := consume(event); err != nil {
+			_, _ = spool.file.Seek(0, 2)
+			return err
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	if err := spool.file.Truncate(0); err != nil {
+		return err
+	}
+	_, err := spool.file.Seek(0, 0)
+	return err
+}
+
 // Reset acknowledges that every current record has committed to SQLite.
 func (spool *Spool) Reset() error {
 	spool.mu.Lock()

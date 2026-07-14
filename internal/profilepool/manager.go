@@ -15,14 +15,20 @@ func NewManager(pool *Pool, factory ReplacementFactory) *Manager {
 }
 
 func (manager *Manager) Reconcile() error {
-	if manager == nil || manager.pool == nil || manager.factory == nil {
+	if manager == nil || manager.pool == nil {
 		return fmt.Errorf("profile manager dependencies are nil")
 	}
 	for _, snapshot := range manager.pool.Snapshot().Profiles {
 		if snapshot.State != StateRetired {
 			continue
 		}
-		replacement, err := manager.factory(snapshot)
+		var replacement Profile
+		var err error
+		if manager.factory != nil {
+			replacement, err = manager.factory(snapshot)
+		} else {
+			replacement, err = manager.pool.recreate(snapshot.ID)
+		}
 		if err != nil {
 			return err
 		}

@@ -21,6 +21,12 @@ func (lease *Lease) ProfileID() string { return lease.entry.profile.ID() }
 
 // Provider identifies the reserved provider.
 func (lease *Lease) Provider() domain.ProviderName { return lease.entry.profile.Provider() }
+func (lease *Lease) AcquiredAt() time.Time         { return lease.acquiredAt }
+func (lease *Lease) Snapshot() Snapshot {
+	lease.pool.mu.Lock()
+	defer lease.pool.mu.Unlock()
+	return snapshotEntry(lease.entry)
+}
 
 // Search executes through the reserved profile.
 func (lease *Lease) Search(ctx context.Context, request domain.SearchRequest) (domain.SearchResponse, error) {

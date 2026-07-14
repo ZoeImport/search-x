@@ -188,6 +188,20 @@ func (pool *Pool) replaceRetired(profileID string, replacement Profile) error {
 	return nil
 }
 
+func (pool *Pool) recreate(profileID string) (Profile, error) {
+	pool.mu.Lock()
+	value, ok := pool.byID[profileID]
+	pool.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("profile %q not found", profileID)
+	}
+	factory, ok := value.profile.(interface{ Recreate() (Profile, error) })
+	if !ok {
+		return nil, fmt.Errorf("profile %q is not recreatable", profileID)
+	}
+	return factory.Recreate()
+}
+
 // Provider returns the single provider represented by the pool.
 func (pool *Pool) Provider() domain.ProviderName { return pool.provider }
 
@@ -268,10 +282,13 @@ func (pool *Pool) Acquire(ctx context.Context, requestID string) (*Lease, error)
 		if lease, ok := pool.tryAcquire(requestID, false, true); ok {
 			return lease, nil
 		}
+		pool.mu.Lock()
+		notification := pool.notify
+		pool.mu.Unlock()
 		select {
 		case <-ctx.Done():
 			return nil, fmt.Errorf("wait for %s profile lease: %w", pool.provider, ctx.Err())
-		case <-pool.notify:
+		case <-notification:
 		}
 	}
 }

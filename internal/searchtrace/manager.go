@@ -35,6 +35,9 @@ type Manager struct {
 	mu        sync.Mutex
 	sequences map[string]uint64
 	healthy   atomic.Bool
+	notify    chan struct{}
+	stop      chan struct{}
+	done      chan struct{}
 }
 
 func NewManager(spool *Spool, store *Store, config ManagerConfig) (*Manager, error) {
@@ -50,19 +53,14 @@ func NewManager(spool *Spool, store *Store, config ManagerConfig) (*Manager, err
 	if config.LogWriter == nil {
 		config.LogWriter = io.Discard
 	}
-	manager := &Manager{spool: spool, store: store, config: config, sequences: make(map[string]uint64)}
+	manager := &Manager{spool: spool, store: store, config: config, sequences: make(map[string]uint64), notify: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
 	manager.healthy.Store(true)
+	go manager.consumeLoop()
 	return manager, nil
 }
 
 func (manager *Manager) Append(ctx context.Context, event Event) error {
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	if !manager.healthy.Load() {
-		if err := manager.replayLocked(ctx); err != nil {
-			return manager.handle(err)
-		}
-	}
 	if event.OccurredAt.IsZero() {
 		event.OccurredAt = manager.config.Now()
 	}
@@ -70,43 +68,65 @@ func (manager *Manager) Append(ctx context.Context, event Event) error {
 	if event.Sequence == 0 {
 		event.Sequence = manager.sequences[event.TraceID]
 	}
+	manager.mu.Unlock()
 	if err := manager.spool.Append(event); err != nil {
 		manager.healthy.Store(false)
 		return manager.handle(err)
 	}
-	if err := manager.store.Put(ctx, event); err != nil {
-		manager.healthy.Store(false)
-		return manager.handle(err)
+	select {
+	case manager.notify <- struct{}{}:
+	default:
 	}
-	if err := manager.spool.Reset(); err != nil {
-		manager.healthy.Store(false)
-		return manager.handle(err)
-	}
-	data, _ := json.Marshal(event)
-	_, _ = manager.config.LogWriter.Write(append(data, '\n'))
-	manager.healthy.Store(true)
 	return nil
 }
 
 func (manager *Manager) Replay(ctx context.Context) error {
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	err := manager.replayLocked(ctx)
+	err := manager.consume(ctx)
 	manager.healthy.Store(err == nil)
 	return manager.handle(err)
 }
 
 func (manager *Manager) replayLocked(ctx context.Context) error {
-	if err := manager.spool.Replay(func(event Event) error { return manager.store.Put(ctx, event) }); err != nil {
-		return err
-	}
-	return manager.spool.Reset()
+	return manager.consume(ctx)
 }
+
+func (manager *Manager) consume(ctx context.Context) error {
+	return manager.spool.Consume(func(event Event) error {
+		if err := manager.store.Put(ctx, event); err != nil {
+			return err
+		}
+		data, _ := json.Marshal(event)
+		_, _ = manager.config.LogWriter.Write(append(data, '\n'))
+		return nil
+	})
+}
+
+func (manager *Manager) consumeLoop() {
+	defer close(manager.done)
+	for {
+		select {
+		case <-manager.stop:
+			_ = manager.consume(context.Background())
+			return
+		case <-manager.notify:
+			err := manager.consume(context.Background())
+			manager.healthy.Store(err == nil)
+		}
+	}
+}
+
+func (manager *Manager) Flush(ctx context.Context) error { return manager.consume(ctx) }
 
 func (manager *Manager) Healthy() bool { return manager.healthy.Load() }
 
 func (manager *Manager) Cleanup(ctx context.Context, config RetentionConfig) error {
-	return manager.store.Cleanup(ctx, config)
+	if err := manager.store.Cleanup(ctx, config); err != nil {
+		return err
+	}
+	if logger, ok := manager.config.LogWriter.(*RotatingLogger); ok {
+		return logger.Cleanup()
+	}
+	return nil
 }
 
 func (manager *Manager) handle(err error) error {
@@ -117,6 +137,8 @@ func (manager *Manager) handle(err error) error {
 }
 
 func (manager *Manager) Close() error {
+	close(manager.stop)
+	<-manager.done
 	storeErr := manager.store.Close()
 	spoolErr := manager.spool.Close()
 	if storeErr != nil {

@@ -14,9 +14,9 @@ flowchart TD
     Service --> Registry["Provider Registry"]
     Registry --> Auto["ProviderChain: auto"]
     Auto --> Baidu["BaiduProvider"]
-    Auto --> Duck["DuckDuckGoProvider"]
     Auto --> Bing["BingProvider"]
     Auto --> Brave["BraveProvider"]
+    Auto --> Duck["DuckDuckGoProvider"]
     Baidu --> Desktop["Desktop HTTP"]
     Desktop -->|失败| Mobile["Mobile HTTP"]
     Mobile -->|失败| Chrome["Chromedp"]
@@ -46,8 +46,8 @@ flowchart TD
 
 - Gin：路由、query binding、request ID、客户端限流和 JSON 编码。
 - SearchService：参数归一化、fresh/stale cache 和 `singleflight`。
-- Provider Registry：按名称查找 `auto`、`baidu`、`duckduckgo`、`bing` 和 `brave`。
-- ProviderChain：兼容 `GET /v1/search`，默认按 `baidu → duckduckgo → bing → brave` 执行跨搜索源 fallback。
+- Provider Registry：按名称查找 `auto`、`baidu`、`bing`、`brave` 和 `duckduckgo`。
+- Capacity-aware Provider Router：`auto` 严格按 `baidu → bing → brave → duckduckgo` 选择拥有可用 Profile permit 的 Provider；显式 Provider 不跨源 fallback。
 - BaiduProvider：编排 `desktop_http → mobile_http → chromedp`。
 - DuckDuckGoProvider：读取轻量 HTML 搜索页，不启动浏览器。
 - BingProvider：使用独立 Chromedp Profile 读取 Bing 结果页。

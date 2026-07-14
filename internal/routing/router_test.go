@@ -41,6 +41,14 @@ func TestRouterUsesFirstProviderWithImmediatelyAvailableLease(t *testing.T) {
 	held.Release(profilepool.Result{Succeeded: true})
 }
 
+func TestRouterRecordsShadowPrediction(t *testing.T) {
+	baidu := routePool(t, &routeProfile{id: "baidu-shadow", provider: domain.ProviderNameBaidu, response: response(domain.ProviderNameBaidu)})
+	router := mustRouter(t, baidu)
+	if got := router.shadowCandidate(nil); got != domain.ProviderNameBaidu {
+		t.Fatalf("shadow=%s", got)
+	}
+}
+
 func TestRouterReroutesRetryableFailure(t *testing.T) {
 	baidu := routePool(t, &routeProfile{id: "baidu-1", provider: domain.ProviderNameBaidu, err: &domain.SearchError{
 		Code: domain.ErrUpstreamTimeout, Message: "timeout", Retryable: true,
@@ -118,6 +126,9 @@ func TestRouterAutoWinsProductionPathAfterThreeExplicitLeases(t *testing.T) {
 	}
 	held, _ := pool.TryAcquire("held")
 	router := mustRouter(t, pool)
+	// Keep the automatic waiter alive while the competing explicit request is
+	// scheduled; the default short wait in mustRouter is for timeout tests.
+	router.config.AutoWait = time.Second
 	autoDone := make(chan error, 1)
 	go func() {
 		_, err := router.Search(context.Background(), domain.SearchRequest{RequestID: "auto"})

@@ -37,6 +37,7 @@ type searchArtifactStore interface {
 type searchRuntime struct {
 	registry      *provider.Registry
 	pools         []*profilepool.Pool
+	managers      []*profilepool.Manager
 	baseTransport *http.Transport
 	closeShared   func()
 	tracer        *searchtrace.Manager
@@ -78,7 +79,13 @@ func newSearchRuntime(configValue config.Config, artifacts searchArtifactStore, 
 				}
 				fmt.Fprintf(os.Stderr, "trace store disabled: %v\n", storeErr)
 			} else {
-				runtimeValue.tracer, err = searchtrace.NewManager(spool, store, searchtrace.ManagerConfig{FailureMode: searchtrace.FailureMode(configValue.TraceFailureMode), StoreQuery: configValue.TraceStoreQuery, LogWriter: os.Stdout, Now: time.Now})
+				traceLogger, loggerErr := searchtrace.NewRotatingLogger(filepath.Join(configValue.TraceRoot, "logs"), configValue.TraceLogRetention, time.Now)
+				if loggerErr != nil {
+					_ = spool.Close()
+					_ = store.Close()
+					return fail(loggerErr)
+				}
+				runtimeValue.tracer, err = searchtrace.NewManager(spool, store, searchtrace.ManagerConfig{FailureMode: searchtrace.FailureMode(configValue.TraceFailureMode), StoreQuery: configValue.TraceStoreQuery, LogWriter: traceLogger, Now: time.Now})
 				if err != nil {
 					return fail(err)
 				}
@@ -116,6 +123,9 @@ func newSearchRuntime(configValue config.Config, artifacts searchArtifactStore, 
 		return fail(err)
 	}
 	runtimeValue.pools = append(runtimeValue.pools, duckPool)
+	for _, pool := range runtimeValue.pools {
+		runtimeValue.managers = append(runtimeValue.managers, profilepool.NewManager(pool, nil))
+	}
 
 	registry := provider.NewRegistry()
 	explicitProviders := make([]provider.Provider, 0, len(runtimeValue.pools))
@@ -209,6 +219,11 @@ func (runtimeValue *searchRuntime) runTraceCleanup(ctx context.Context, configVa
 			return
 		case <-ticker.C:
 			cleanup()
+			for _, manager := range runtimeValue.managers {
+				if err := manager.Reconcile(); err != nil {
+					fmt.Fprintf(os.Stderr, "profile reconcile failed: %v\n", err)
+				}
+			}
 		}
 	}
 }
@@ -363,18 +378,26 @@ func buildBrowserPool(providerName domain.ProviderName, count, capacity int, roo
 	}
 	for index := 0; index < count; index++ {
 		id := fmt.Sprintf("%s-%04d", providerName, index+1)
-		searcher, closeFn, err := factory(filepath.Join(root, id))
+		profileDir := filepath.Join(root, id)
+		var createProfile func() (profilepool.Profile, error)
+		createProfile = func() (profilepool.Profile, error) {
+			searcher, closeFn, err := factory(profileDir)
+			if err != nil {
+				return nil, err
+			}
+			profile, profileErr := profilepool.NewProviderProfileWithFactory(id, capacity, searcher, closeFn, createProfile)
+			if profileErr != nil {
+				_ = closeFn()
+				return nil, profileErr
+			}
+			return profile, nil
+		}
+		created, err := createProfile()
 		if err != nil {
 			closeCreated()
 			return nil, fmt.Errorf("create %s profile %s: %w", providerName, id, err)
 		}
-		profile, err := profilepool.NewProviderProfile(id, capacity, searcher, closeFn)
-		if err != nil {
-			_ = closeFn()
-			closeCreated()
-			return nil, err
-		}
-		profiles = append(profiles, profile)
+		profiles = append(profiles, created)
 	}
 	pool, err := newManagedPool(profiles, manifestRoot, providerRate, providerBurst)
 	if err != nil {
@@ -388,19 +411,21 @@ func buildDuckDuckGoPool(configValue config.Config, headers headerprofile.Pool, 
 	count := normalizedPositive(configValue.DuckDuckGoProfileCount, 4)
 	profiles := make([]profilepool.Profile, 0, count)
 	for index := 0; index < count; index++ {
-		jar, err := cookiejar.New(nil)
-		if err != nil {
-			return nil, err
+		id := fmt.Sprintf("duckduckgo-%04d", index+1)
+		var createProfile func() (profilepool.Profile, error)
+		createProfile = func() (profilepool.Profile, error) {
+			jar, err := cookiejar.New(nil)
+			if err != nil {
+				return nil, err
+			}
+			client := &http.Client{Transport: baseTransport, Jar: jar}
+			searcher, err := duckduckgo.New(duckduckgo.Config{BaseURL: configValue.DuckDuckGoURL, UserAgent: configValue.UserAgent, Timeout: configValue.DuckDuckGoTimeout, MaxBodyBytes: configValue.MaxBodyBytes, HeaderProfiles: headers}, client)
+			if err != nil {
+				return nil, err
+			}
+			return profilepool.NewProviderProfileWithFactory(id, normalizedPositive(configValue.DuckDuckGoProfileCapacity, 1), searcher, nil, createProfile)
 		}
-		client := &http.Client{Transport: baseTransport, Jar: jar}
-		searcher, err := duckduckgo.New(duckduckgo.Config{
-			BaseURL: configValue.DuckDuckGoURL, UserAgent: configValue.UserAgent,
-			Timeout: configValue.DuckDuckGoTimeout, MaxBodyBytes: configValue.MaxBodyBytes, HeaderProfiles: headers,
-		}, client)
-		if err != nil {
-			return nil, err
-		}
-		profile, err := profilepool.NewProviderProfile(fmt.Sprintf("duckduckgo-%04d", index+1), normalizedPositive(configValue.DuckDuckGoProfileCapacity, 1), searcher, nil)
+		profile, err := createProfile()
 		if err != nil {
 			return nil, err
 		}
