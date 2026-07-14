@@ -80,10 +80,18 @@ C_{read}=\min(2N,10)
 
 ## 4. API 设计
 
-### 4.1 新增组合接口
+### 4.1 统一搜索接口
+
+现有轻量查询接口保持不变：
 
 ```http
-POST /v1/search/content
+GET /v1/search
+```
+
+新增同资源路径的高级请求形式：
+
+```http
+POST /v1/search
 Content-Type: application/json
 ```
 
@@ -94,9 +102,12 @@ Content-Type: application/json
   "query": "Go 语言并发模型",
   "provider": "auto",
   "limit": 5,
-  "candidate_limit": 0,
-  "format": "markdown",
-  "max_chars": 30000,
+  "content": {
+    "enabled": true,
+    "candidate_limit": 0,
+    "format": "markdown",
+    "max_chars": 30000
+  },
   "refresh": false,
   "debug": false
 }
@@ -106,12 +117,19 @@ Content-Type: application/json
 
 - `query`：必填，沿用 `/v1/search` 的长度与规范化规则。
 - `provider`：默认 `auto`；指定具体 Provider 时不执行跨 Provider 质量选择。
-- `limit`：期望返回的可读正文数量，范围 `1..10`，默认 `5`。
-- `candidate_limit`：`0` 表示自动计算；显式值范围为 `limit..20`。
-- `format`：`markdown` 或 `text`。
-- `max_chars`：每条正文的 Unicode 字符上限，沿用 `/v1/read` 规则。
+- `limit`：期望返回的结果数量，范围 `1..10`，默认 `5`；启用正文时表示期望返回的可读正文数量。
+- `content`：可选；缺省或 `enabled=false` 时只执行搜索，不读取正文。
+- `content.candidate_limit`：`0` 表示自动计算；显式值范围为 `limit..20`。
+- `content.format`：`markdown` 或 `text`。
+- `content.max_chars`：每条正文的 Unicode 字符上限，沿用 `/v1/read` 规则。
 - `refresh`：同时跳过搜索 fresh cache 和正文 fresh cache。
 - `debug`：需要 `X-Debug-Token`，自动隐含 `refresh=true`。
+
+请求模式：
+
+- `content` 缺省或 `enabled=false`：调用轻量搜索服务，响应语义与现有 `GET /v1/search` 一致。
+- `content.enabled=true`：调用组合编排服务，执行 Provider 质量选择、超额候选和正文读取。
+- 不在 `GET /v1/search` 增加 `include_content` 一类参数。正文读取可能触发浏览器、并发调度和 30 秒预算，不适合被中间缓存、预取或自动重试为普通幂等查询。
 
 成功响应：
 
@@ -170,9 +188,25 @@ Content-Type: application/json
 
 ### 4.2 兼容性
 
-- 保留 `GET /v1/search`。
+- 保留 `GET /v1/search` 的现有参数、响应和轻量语义。
+- `POST /v1/search` 作为同一搜索资源的高级调用入口，不新增 `/v1/search/content` 子资源。
 - 保留 `POST /v1/read`。
 - 现有 UI 可继续分别调用两个接口；后续增加组合搜索开关，不要求重写为浏览器应用。
+
+### 4.3 内部编排边界
+
+路由统一不合并业务职责。HTTP handler 只负责参数绑定、鉴权和响应映射：
+
+```go
+type SearchContentOrchestrator interface {
+    Search(ctx context.Context, request domain.SearchContentRequest) (domain.SearchContentResponse, error)
+}
+```
+
+- `content.enabled=false` 时调用现有 `SearchService`。
+- `content.enabled=true` 时调用 `SearchContentOrchestrator`。
+- `SearchContentOrchestrator` 组合 `ProviderSelector`、`ReadScheduler`、`ContentQualityEvaluator` 和排名选择器，不直接实现 Provider、HTTP、Chromedp、正文提取或格式转换。
+- `POST /v1/read` 继续直接暴露单 URL 读取能力，组合搜索不得复制其安全校验、缓存、提取和转换实现。
 
 ## 5. 搜索质量选择
 
@@ -335,7 +369,7 @@ C=\min(2N+2,20)
 ### 9.1 基准系统
 
 - Baseline：固定 commit 与依赖版本的 `web-search-mcp`，通过 MCP stdio 调用 `full-web-search`，而不是“摘要搜索加单页抓取”。
-- Candidate：本项目 `POST /v1/search/content`。
+- Candidate：本项目 `POST /v1/search`，并设置 `content.enabled=true`。
 - 已有 `/Users/zoe/Documents/daily/web-search-comparison-demo` MCP client 和 stdout-to-stderr bootstrap 继续复用并扩展。
 
 ### 9.2 查询集
@@ -415,7 +449,8 @@ F=\frac{\sum_q\min(R_q,N)}{Q_{total}\cdot N}
 
 ### 10.2 集成测试
 
-- 使用本地 fixture Provider 和 fixture page 完整验证 `/v1/search/content`。
+- 使用本地 fixture Provider 和 fixture page 完整验证 `POST /v1/search` 的正文模式。
+- 验证 `content` 缺省与 `enabled=false` 时不触发任何正文读取，并保持轻量搜索响应语义。
 - 构造前 3 条读取失败、第 4 至第 8 条成功的结果，证明能够补足 5 条并保留双排名。
 - 构造完成顺序与原始排名相反的读取结果，证明响应不按完成时间排序。
 - 构造 Browser pool 排队和总 deadline，证明没有 goroutine 泄漏。
@@ -433,7 +468,7 @@ F=\frac{\sum_q\min(R_q,N)}{Q_{total}\cdot N}
 2. 实现 CJK quality evaluator 与 QualityProviderSelector。
 3. 增加 Brave Provider。
 4. 实现两级 ReadScheduler 和 Browser 并发池。
-5. 注册 `/v1/search/content`，补齐 UI 组合模式和文档。
+5. 注册 `POST /v1/search`，补齐轻量模式、正文模式、UI 组合开关和文档。
 6. 扩展 comparison demo，使其调用 `full-web-search` 与组合 API。
 7. 运行首轮 20 查询、3 轮基准并生成 PASS/FAIL 报告。
 8. 对失败指标迭代实现，直到全部门槛通过。
