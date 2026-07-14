@@ -49,6 +49,22 @@ func TestNewCreatesReusableClientWithoutLaunchingChrome(t *testing.T) {
 	client.Close()
 }
 
+func TestNewUsesConfiguredTabCapacity(t *testing.T) {
+	client, err := New(Config{
+		ProfileDir:        t.TempDir(),
+		Timeout:           10 * time.Second,
+		Headless:          true,
+		MaxConcurrentTabs: 3,
+	}, testURLBuilder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if cap(client.semaphore) != 3 {
+		t.Fatalf("tab capacity = %d", cap(client.semaphore))
+	}
+}
+
 func TestNewRejectsMissingURLBuilder(t *testing.T) {
 	_, err := New(Config{ProfileDir: t.TempDir(), Timeout: 10 * time.Second}, nil)
 	if err == nil || !strings.Contains(err.Error(), "builder") {

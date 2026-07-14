@@ -26,6 +26,12 @@ func TestLoadDefaults(t *testing.T) {
 	if got.BingURL != "https://www.bing.com/search" || got.BingTimeout != 10*time.Second || got.BingProfileDir != "./var/chrome-profile-bing" {
 		t.Fatalf("bing=%#v", got)
 	}
+	if got.BraveURL != "https://search.brave.com/search" || got.BraveTimeout != 10*time.Second || got.BraveProfileDir != "./var/chrome-profile-brave" {
+		t.Fatalf("brave=%#v", got)
+	}
+	if got.ProviderBrowserSlots != 2 || got.ReadBrowserSlots != 3 {
+		t.Fatalf("browser slots=%#v", got)
+	}
 	if !got.ReadEnabled || !got.ReadBrowserEnabled || got.ReadHTTPTimeout != 6*time.Second || got.ReadBrowserTimeout != 12*time.Second {
 		t.Fatalf("read switches=%#v", got)
 	}
@@ -47,6 +53,8 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("SEARCH_PROVIDER_RATE", "0.5")
 	t.Setenv("SEARCH_TRUSTED_PROXIES", "10.0.0.0/8,192.168.0.0/16")
 	t.Setenv("SEARCH_READ_HOST_ALLOWLIST", "demo.internal, docs.internal")
+	t.Setenv("SEARCH_PROVIDER_BROWSER_SLOTS", "4")
+	t.Setenv("SEARCH_READ_BROWSER_SLOTS", "5")
 	got, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -57,6 +65,9 @@ func TestLoadOverrides(t *testing.T) {
 	if len(got.ReadHostAllowlist) != 2 || got.ReadHostAllowlist[1] != "docs.internal" {
 		t.Fatalf("read config=%#v", got)
 	}
+	if got.ProviderBrowserSlots != 4 || got.ReadBrowserSlots != 5 {
+		t.Fatalf("browser slots=%#v", got)
+	}
 }
 
 func TestLoadRejectsInvalidValues(t *testing.T) {
@@ -65,6 +76,8 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"SEARCH_PROVIDER_BURST", "0", "SEARCH_PROVIDER_BURST"},
 		{"SEARCH_DEBUG", "sometimes", "SEARCH_DEBUG"},
 		{"SEARCH_READ_MAX_REDIRECTS", "0", "SEARCH_READ_MAX_REDIRECTS"},
+		{"SEARCH_PROVIDER_BROWSER_SLOTS", "0", "SEARCH_PROVIDER_BROWSER_SLOTS"},
+		{"SEARCH_READ_BROWSER_SLOTS", "0", "SEARCH_READ_BROWSER_SLOTS"},
 	} {
 		t.Run(test.key, func(t *testing.T) {
 			for _, key := range knownEnvironmentVariables() {

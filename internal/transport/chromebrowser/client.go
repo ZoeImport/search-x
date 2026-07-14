@@ -22,6 +22,8 @@ type Config struct {
 	ProfileDir string
 	ExecPath   string
 	Timeout    time.Duration
+	// MaxConcurrentTabs bounds simultaneous tabs owned by this browser client.
+	MaxConcurrentTabs int
 	// PostLoadWait allows page scripts to replace an initial JavaScript shell before DOM capture.
 	PostLoadWait   time.Duration
 	Headless       bool
@@ -57,6 +59,9 @@ func New(config Config, urlBuilder URLBuilder) (*Client, error) {
 	if config.MaxBodyBytes <= 0 {
 		config.MaxBodyBytes = 4 << 20
 	}
+	if config.MaxConcurrentTabs <= 0 {
+		config.MaxConcurrentTabs = 1
+	}
 	if err := os.MkdirAll(config.ProfileDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create chrome profile directory: %w", err)
 	}
@@ -82,7 +87,7 @@ func New(config Config, urlBuilder URLBuilder) (*Client, error) {
 		allocatorStop: allocatorStop,
 		browserCtx:    browserCtx,
 		browserStop:   browserStop,
-		semaphore:     make(chan struct{}, 1),
+		semaphore:     make(chan struct{}, config.MaxConcurrentTabs),
 	}, nil
 }
 
