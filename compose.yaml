@@ -10,16 +10,23 @@ services:
       SEARCH_DEBUG_DIR: "/data/debug"
       SEARCH_CHROME_PROFILE_DIR: "/data/chrome-profile"
       SEARCH_BING_PROFILE_DIR: "/data/bing-profile"
+      SEARCH_BRAVE_PROFILE_DIR: "/data/brave-profile"
+      SEARCH_READ_CHROME_PROFILE_DIR: "/data/read-profile"
       SEARCH_CHROME_PATH: "/usr/bin/chromium"
       SEARCH_CHROME_HEADLESS: "true"
       SEARCH_CHROME_NO_SANDBOX: "true"
       SEARCH_PROVIDER_RATE: "1"
       SEARCH_PROVIDER_BURST: "3"
+      SEARCH_PROVIDER_BROWSER_SLOTS: "2"
+      SEARCH_READ_BROWSER_SLOTS: "3"
+      SEARCH_CONTENT_TIMEOUT: "30s"
       SEARCH_JITTER_MIN: "200ms"
       SEARCH_JITTER_MAX: "800ms"
     volumes:
       - chrome-profile:/data/chrome-profile
       - bing-profile:/data/bing-profile
+      - brave-profile:/data/brave-profile
+      - read-profile:/data/read-profile
       - debug-artifacts:/data/debug
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://127.0.0.1:8080/healthz"]
@@ -31,4 +38,6 @@ services:
 volumes:
   chrome-profile: {}
   bing-profile: {}
+  brave-profile: {}
+  read-profile: {}
   debug-artifacts: {}

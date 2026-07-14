@@ -1,8 +1,8 @@
 # Web Search Backend Demo
 
-一个面向人类客户端和 AI Agent 的 Go + Gin 网页搜索 API。项目通过通用 `Provider` 接口注册 Baidu、DuckDuckGo、Bing 和自动 fallback Chain。
+一个面向人类客户端和 AI Agent 的 Go + Gin 网页搜索 API。项目通过通用 `Provider` 接口注册 Baidu、DuckDuckGo、Bing、Brave 和自动 fallback Chain。
 
-当前实现不使用付费 SERP API。搜索链路读取公开搜索结果页，并通过跨 Provider fallback、Provider 内部 transport fallback、缓存、限流、抖动和熔断提供 best-effort 可用性；独立的 Read API 可按需读取某条结果的 HTML/纯文本正文并转换为 Markdown 或 text。
+当前实现不使用付费 SERP API。搜索链路读取公开搜索结果页，并通过跨 Provider fallback、Provider 质量选择、超额候选、Provider 内部 transport fallback、缓存、限流、抖动和熔断提供 best-effort 可用性；独立的 Read API 可按需读取某条结果的 HTML/纯文本正文并转换为 Markdown 或 text。
 
 ## 架构
 
@@ -16,6 +16,7 @@ flowchart TD
     Auto --> Baidu["BaiduProvider"]
     Auto --> Duck["DuckDuckGoProvider"]
     Auto --> Bing["BingProvider"]
+    Auto --> Brave["BraveProvider"]
     Baidu --> Desktop["Desktop HTTP"]
     Desktop -->|失败| Mobile["Mobile HTTP"]
     Mobile -->|失败| Chrome["Chromedp"]
@@ -24,6 +25,12 @@ flowchart TD
     Chrome --> Detector
     Duck --> DuckHTTP["DuckDuckGo HTML HTTP"]
     Bing --> BingChrome["Bing Chromedp"]
+    Brave --> BraveChrome["Brave Chromedp"]
+    Gin --> Combined["SearchContentService"]
+    Combined --> Quality["Unicode/CJK Quality Selector"]
+    Quality --> Registry
+    Combined --> Scheduler["ReadScheduler: oversample + stable ranks"]
+    Scheduler --> ReadService
     Gin --> ReadService["ReadService"]
     ReadService --> SafeURL["SafeURLPolicy"]
     ReadService --> ReadHTTP["Bounded HTTP Reader"]
@@ -32,17 +39,21 @@ flowchart TD
     Service -->|实时失败| Stale["Stale Cache"]
     Baidu --> Artifacts["HTML / Screenshot Artifacts"]
     Bing --> Artifacts
+    Brave --> Artifacts
 ```
 
 职责边界：
 
 - Gin：路由、query binding、request ID、客户端限流和 JSON 编码。
 - SearchService：参数归一化、fresh/stale cache 和 `singleflight`。
-- Provider Registry：按名称查找 `auto`、`baidu`、`duckduckgo` 和 `bing`。
-- ProviderChain：默认按 `baidu → duckduckgo → bing` 执行跨搜索源 fallback。
+- Provider Registry：按名称查找 `auto`、`baidu`、`duckduckgo`、`bing` 和 `brave`。
+- ProviderChain：兼容 `GET /v1/search`，默认按 `baidu → duckduckgo → bing → brave` 执行跨搜索源 fallback。
 - BaiduProvider：编排 `desktop_http → mobile_http → chromedp`。
 - DuckDuckGoProvider：读取轻量 HTML 搜索页，不启动浏览器。
 - BingProvider：使用独立 Chromedp Profile 读取 Bing 结果页。
+- BraveProvider：使用独立 Chromedp Profile 读取 Brave 公开结果页。
+- QualityProviderSelector：组合模式下并发观察 `baidu → bing → brave → duckduckgo`，使用 Unicode/CJK 相关性、字段完整率和域名多样性选择整组结果。
+- SearchContentService：按 \(C=\min(2N+2,20)\) 超额搜索候选，并发读取后按原始排名保留前 \(N\) 条成功正文。
 - Detector：区分正常页、空结果、验证码、429、封禁和 DOM 变化。
 - Parser：分别解析桌面页、移动页和浏览器 DOM。
 - DebugArtifactStore：保存完整 HTML、截图以及 SHA-256。
@@ -90,6 +101,7 @@ make smoke Q='golang'
 浏览器访问 [http://127.0.0.1:8080/ui/](http://127.0.0.1:8080/ui/) 可使用内嵌的 Searchroom：
 
 - 设置 query、Provider、limit、page、refresh、debug 和 Debug Token。
+- 可开启“返回可读正文”，设置候选上限、format 和 max chars，直接调用统一 `POST /v1/search`。
 - 查看每条结果的实际 Provider、fallback、缓存、warnings 和 attempts。
 - 点击结果调用 `/v1/read`，查看渲染后的 Markdown、原始 Markdown/text、可折叠 JSON Tree 和 Debug。
 - Debug Token 只保存在浏览器 `sessionStorage`，不会进入 URL。
@@ -112,7 +124,7 @@ docker-compose up -d
 docker-compose ps
 ```
 
-容器使用非 root 用户运行。Baidu 与 Bing 使用独立 Chromium Profile；Profile 和调试文件分别持久化到独立 volume。
+容器使用非 root 用户运行。Baidu、Bing、Brave 与正文读取使用独立 Chromium Profile；Profile 和调试文件分别持久化到独立 volume。
 
 停止服务：
 
@@ -133,7 +145,7 @@ docker-compose down --volumes
 | 参数 | 必填 | 默认值 | 范围 |
 |---|---:|---:|---|
 | `q` | 是 | - | 1–256 个字符 |
-| `provider` | 否 | `auto` | 支持 `auto`、`baidu`、`duckduckgo`、`bing`；显式 Provider 不跨源 fallback |
+| `provider` | 否 | `auto` | 支持 `auto`、`baidu`、`duckduckgo`、`bing`、`brave`；显式 Provider 不跨源 fallback |
 | `limit` | 否 | `10` | 1–20 |
 | `page` | 否 | `1` | 1–10 |
 | `refresh` | 否 | `false` | `true` 跳过 fresh cache，强制实时查询 |
@@ -174,7 +186,39 @@ docker-compose down --volumes
 
 顶层 `provider` 是本次结果集的实际搜索源；每条 `results[].provider` 是该条内容的来源；`requested_provider` 是调用方选择的值。`fallback_count` 表示单个 Provider 内部 transport fallback 次数，`provider_fallback_count` 表示跨 Provider fallback 次数。
 
-`transport` 可能是 `desktop_http`、`mobile_http`、`chromedp`、`duckduckgo_http`、`bing_chromedp`、`fresh_cache` 或 `stale_cache`。
+`transport` 可能是 `desktop_http`、`mobile_http`、`chromedp`、`duckduckgo_http`、`bing_chromedp`、`brave_chromedp`、`fresh_cache` 或 `stale_cache`。
+
+### `POST /v1/search`
+
+同一路径的高级 JSON 调用。`content` 缺省或 `enabled=false` 时只执行轻量搜索；`content.enabled=true` 时执行质量选源、超额候选和正文读取。正文模式的 `limit` 范围为 1–10，默认 5。
+
+```bash
+curl 'http://127.0.0.1:8080/v1/search' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "query": "Go 语言并发模型",
+    "provider": "auto",
+    "limit": 5,
+    "content": {
+      "enabled": true,
+      "candidate_limit": 0,
+      "format": "markdown",
+      "max_chars": 30000
+    },
+    "refresh": false,
+    "debug": false
+  }'
+```
+
+`candidate_limit=0` 自动使用：
+
+\[
+C=\min(2N+2,20)
+\]
+
+其中 \(N\) 是请求的可读正文数，\(C\) 是搜索候选数。例如请求 5 篇正文时搜索 12 条候选。读取完成顺序不会改变排名：`original_rank` 保留 Provider 原始名次，`selected_rank` 是本次成功正文的连续序号。
+
+成功数不足 `limit` 但至少有一篇时仍返回 HTTP 200，并设置 `meta.partial=true` 和 `partial_readable_results` warning；全部候选读取失败时返回 HTTP 422 `insufficient_readable_results`。`debug=true` 需要同一 `X-Debug-Token`，失败响应会额外包含 `search_attempts` 与 `read_attempts` 的原始信息。
 
 ### 强制刷新
 
@@ -246,7 +290,7 @@ curl 'http://127.0.0.1:8080/v1/read' \
 
 读取链路为 `SafeURLPolicy → HTTPReader → MIME Detector → Extractor → Quality → Converter`。当 HTTP 返回 JS challenge、无法提取正文或质量判断为 JS shell 时，服务会按需执行一次 `BrowserReader → Detector → Extractor → Quality → Converter`。浏览器执行页面脚本并读取最终 DOM，不会自动填写验证码、登录账号或绕过付费墙；浏览器渲染仍没有正文时会返回明确错误。
 
-BrowserReader 使用独立 Profile、单请求 deadline、串行并发槽和 DOM 大小上限。当前实现面向本机 Demo：主 URL 和最终 URL 都经过 SafeURLPolicy，但浏览器加载的页面子资源尚未通过 HTTPReader 的 DNS pinning transport。部署到不可信公网前，应将浏览器 reader 放入无内网路由的隔离 worker/容器并配置 egress policy；也可以设置 `SEARCH_READ_BROWSER_ENABLED=false` 完全关闭它。
+BrowserReader 使用独立 Profile、单请求 deadline、默认 3 个并发 tab slot 和 DOM 大小上限。当前实现面向本机 Demo：主 URL 和最终 URL 都经过 SafeURLPolicy，但浏览器加载的页面子资源尚未通过 HTTPReader 的 DNS pinning transport。部署到不可信公网前，应将浏览器 reader 放入无内网路由的隔离 worker/容器并配置 egress policy；也可以设置 `SEARCH_READ_BROWSER_ENABLED=false` 完全关闭它。
 
 SSRF 防护会拒绝私网、回环、link-local、CGNAT、Metadata、组播、非法协议和危险重定向。Demo 如需读取本机 fixture，只能通过 `SEARCH_READ_HOST_ALLOWLIST` 精确允许 Host；allowlist 仍不能开放 Metadata 或 link-local 地址。
 
@@ -316,6 +360,7 @@ SSRF 防护会拒绝私网、回环、link-local、CGNAT、Metadata、组播、�
 | 415 | `unsupported_content_type` | Read 第一阶段不支持 PDF、图片或 Office 文件 |
 | 413 | `content_too_large` | 解压后的资源超过读取硬上限 |
 | 422 | `extraction_failed` | HTTP 与浏览器路径都未提取到有效正文，或浏览器 fallback 被关闭 |
+| 422 | `insufficient_readable_results` | 组合搜索的全部候选都未产生有效正文 |
 | 502 | `fetch_failed` | Read DNS、TLS、连接或上游响应失败 |
 | 504 | `fetch_timeout` | Read 获取或渲染超时 |
 
@@ -331,8 +376,8 @@ SSRF 防护会拒绝私网、回环、link-local、CGNAT、Metadata、组播、�
 - Desktop/Mobile HTTP 使用稳定 User-Agent、Cookie Jar 和连接池。
 - CAPTCHA 对相应 Transport 熔断 30 分钟。
 - HTTP 429 对相应 Transport 熔断 5 分钟。
-- Chromedp 使用持久化 Profile，最大并发为 1。
-- Baidu 和 Bing 使用不同的 Chrome Profile，Cookie 与 Session 不共享。
+- 搜索 Chromedp client 默认最多 2 个并发 tab，正文 Chromedp client 默认最多 3 个并发 tab。
+- Baidu、Bing、Brave 和正文读取使用不同的 Chrome Profile，Cookie 与 Session 不共享。
 - `auto` 只对验证码、限流、超时、上游结构变化和 Provider 不可用执行跨源 fallback。
 - 实时失败且存在 stale cache 时返回 HTTP 200、`degraded=true`，并附带本次实时失败 attempts。
 
@@ -347,10 +392,12 @@ SSRF 防护会拒绝私网、回环、link-local、CGNAT、Metadata、组播、�
 | `SEARCH_DEBUG_PREVIEW_BYTES` | `32768` | API 正文 preview 上限 |
 | `SEARCH_CHROME_PROFILE_DIR` | `./var/chrome-profile` | 持久化 Chrome Profile |
 | `SEARCH_BING_PROFILE_DIR` | `./var/chrome-profile-bing` | Bing 独立 Chrome Profile |
+| `SEARCH_BRAVE_PROFILE_DIR` | `./var/chrome-profile-brave` | Brave 独立 Chrome Profile |
 | `SEARCH_CHROME_PATH` | 空 | Chrome/Chromium 可执行文件 |
 | `SEARCH_CHROME_HEADLESS` | `true` | 是否无头运行 |
 | `SEARCH_CHROME_NO_SANDBOX` | `false` | Docker 中可设为 `true` |
 | `SEARCH_TOTAL_TIMEOUT` | `20s` | 整体请求超时 |
+| `SEARCH_CONTENT_TIMEOUT` | `30s` | 组合搜索与正文读取的整体请求超时 |
 | `SEARCH_DESKTOP_TIMEOUT` | `4s` | Desktop HTTP 超时 |
 | `SEARCH_MOBILE_TIMEOUT` | `4s` | Mobile HTTP 超时 |
 | `SEARCH_CHROME_TIMEOUT` | `10s` | Chromedp 超时 |
@@ -358,6 +405,9 @@ SSRF 防护会拒绝私网、回环、link-local、CGNAT、Metadata、组播、�
 | `SEARCH_DUCKDUCKGO_TIMEOUT` | `5s` | DuckDuckGo HTTP 超时 |
 | `SEARCH_BING_URL` | `https://www.bing.com/search` | Bing 搜索地址 |
 | `SEARCH_BING_TIMEOUT` | `10s` | Bing Chromedp 超时 |
+| `SEARCH_BRAVE_URL` | `https://search.brave.com/search` | Brave 搜索地址 |
+| `SEARCH_BRAVE_TIMEOUT` | `10s` | Brave Chromedp 超时 |
+| `SEARCH_PROVIDER_BROWSER_SLOTS` | `2` | 每个搜索浏览器 client 的最大并发 tab 数 |
 | `SEARCH_FRESH_TTL` | `15m` | fresh cache TTL |
 | `SEARCH_STALE_TTL` | `24h` | stale 最大年龄 |
 | `SEARCH_PROVIDER_RATE` | `1` | Provider token/s |
@@ -372,6 +422,7 @@ SSRF 防护会拒绝私网、回环、link-local、CGNAT、Metadata、组播、�
 | `SEARCH_READ_BROWSER_ENABLED` | `true` | 是否在符合条件时启用 Chromedp 正文 fallback |
 | `SEARCH_READ_BROWSER_TIMEOUT` | `12s` | 单次浏览器正文读取超时 |
 | `SEARCH_READ_BROWSER_WAIT` | `2s` | DOM ready 后等待页面脚本渲染的时间 |
+| `SEARCH_READ_BROWSER_SLOTS` | `3` | 正文浏览器最大并发 tab 数 |
 | `SEARCH_READ_CHROME_PROFILE_DIR` | `./var/chrome-profile-read` | 正文浏览器独立 Profile 目录 |
 | `SEARCH_READ_FRESH_TTL` | `30m` | 正文 fresh cache TTL |
 | `SEARCH_READ_STALE_TTL` | `24h` | 正文 stale cache 最大年龄 |
@@ -392,11 +443,11 @@ make check
 
 `make check` 顺序执行普通测试、Race Detector、`go vet` 和二进制构建。也可以单独执行 `make test`、`make test-race`、`make vet` 或 `make build`。
 
-离线端到端测试会启动本地假百度和 DuckDuckGo 服务器，并通过静态 Bing fixture 完整验证 Gin、SearchService、ProviderChain、Provider、Transport、Detector 和 Parser 链路。
+离线端到端测试会启动本地假百度、DuckDuckGo 和正文服务器，并通过静态 Bing/Brave fixture 完整验证 Gin、SearchService、质量选源、超额候选、ReadScheduler、Provider、Transport、Detector、Extractor 和 Converter 链路。
 
 ## 边界
 
-- 本项目无法保证百度、DuckDuckGo 或 Bing 永不返回验证码或限流。
+- 本项目无法保证百度、DuckDuckGo、Bing 或 Brave 永不返回验证码或限流。
 - 不自动解题、破解或绕过验证码。
 - 持久化 Profile、缓存、低频率、jitter 和熔断用于减少触发概率及避免反复冲击上游。
 - 搜索引擎调整 DOM 后需要更新对应 Parser fixture 和 selector。
