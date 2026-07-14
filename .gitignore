@@ -3,6 +3,8 @@
 /bin/
 /var/
 /tmp/
+/log/
 /jq
 *.log
 .DS_Store
+.omo/
