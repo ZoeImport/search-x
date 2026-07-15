@@ -257,17 +257,17 @@ func buildBaiduPool(configValue config.Config, artifacts baidu.ArtifactStore, he
 			return nil, nil, createErr
 		}
 		identityClient := &http.Client{Transport: baseTransport, Jar: jar}
-		desktopClient, createErr := httpsearch.New(httpsearch.Config{Name: domain.TransportNameDesktopHTTP, BaseURL: configValue.DesktopURL, Referer: origin(configValue.DesktopURL), UserAgent: configValue.UserAgent, Timeout: configValue.DesktopTimeout, MaxBodyBytes: configValue.MaxBodyBytes, HeaderProfiles: headers}, identityClient)
+		desktopClient, createErr := httpsearch.New(httpsearch.Config{Name: domain.TransportNameDesktopHTTP, BaseURL: configValue.DesktopURL, Referer: origin(configValue.DesktopURL), UserAgent: configValue.UserAgent, Timeout: configValue.DesktopTimeout, MaxBodyBytes: configValue.MaxBodyBytes, HeaderProfiles: headers, HeaderProfileKey: profileID}, identityClient)
 		if createErr != nil {
 			closeCreated()
 			return nil, nil, createErr
 		}
-		mobileClient, createErr := httpsearch.New(httpsearch.Config{Name: domain.TransportNameMobileHTTP, BaseURL: configValue.MobileURL, Referer: origin(configValue.MobileURL), UserAgent: configValue.UserAgent, Timeout: configValue.MobileTimeout, MaxBodyBytes: configValue.MaxBodyBytes, HeaderProfiles: headers}, identityClient)
+		mobileClient, createErr := httpsearch.New(httpsearch.Config{Name: domain.TransportNameMobileHTTP, BaseURL: configValue.MobileURL, Referer: origin(configValue.MobileURL), UserAgent: configValue.UserAgent, Timeout: configValue.MobileTimeout, MaxBodyBytes: configValue.MaxBodyBytes, HeaderProfiles: headers, HeaderProfileKey: profileID}, identityClient)
 		if createErr != nil {
 			closeCreated()
 			return nil, nil, createErr
 		}
-		chromeClient, createErr := chromebrowser.New(chromebrowser.Config{ProfileDir: filepath.Join(configValue.ChromeProfileDir, profileID), ExecPath: configValue.ChromePath, Timeout: configValue.ChromeTimeout, Headless: configValue.ChromeHeadless, DisableSandbox: configValue.ChromeNoSandbox, MaxBodyBytes: int(configValue.MaxBodyBytes), MaxConcurrentTabs: normalizedPositive(configValue.ProviderBrowserSlots, 2), HeaderProfiles: headers}, func(request domain.SearchRequest) (string, error) {
+		chromeClient, createErr := chromebrowser.New(chromebrowser.Config{ProfileDir: filepath.Join(configValue.ChromeProfileDir, profileID), ExecPath: configValue.ChromePath, Timeout: configValue.ChromeTimeout, Headless: configValue.ChromeHeadless, DisableSandbox: configValue.ChromeNoSandbox, MaxBodyBytes: int(configValue.MaxBodyBytes), MaxConcurrentTabs: normalizedPositive(configValue.ProviderBrowserSlots, 2), HeaderProfiles: headers, HeaderProfileKey: profileID}, func(request domain.SearchRequest) (string, error) {
 			return baidu.BuildSearchURL(configValue.DesktopURL, request)
 		})
 		if createErr != nil {
@@ -328,10 +328,11 @@ func buildBaiduPool(configValue config.Config, artifacts baidu.ArtifactStore, he
 func buildBingPool(configValue config.Config, artifacts bing.ArtifactStore, headers headerprofile.Pool) (*profilepool.Pool, error) {
 	return buildBrowserPool(domain.ProviderNameBing, normalizedPositive(configValue.BingProfileCount, 5), normalizedPositive(configValue.BingProfileCapacity, 2), configValue.BingProfileDir, filepath.Join(configValue.ProfileManifestRoot, string(domain.ProviderNameBing)), configValue.ProviderRate, configValue.ProviderBurst,
 		func(profileDir string) (profilepool.Searcher, func() error, error) {
+			profileID := filepath.Base(profileDir)
 			client, err := chromebrowser.New(chromebrowser.Config{
 				ProfileDir: profileDir, ExecPath: configValue.ChromePath, Timeout: configValue.BingTimeout,
 				Headless: configValue.ChromeHeadless, DisableSandbox: configValue.ChromeNoSandbox,
-				MaxBodyBytes: int(configValue.MaxBodyBytes), MaxConcurrentTabs: normalizedPositive(configValue.BingProfileCapacity, 2), HeaderProfiles: headers,
+				MaxBodyBytes: int(configValue.MaxBodyBytes), MaxConcurrentTabs: normalizedPositive(configValue.BingProfileCapacity, 2), HeaderProfiles: headers, HeaderProfileKey: profileID,
 			}, func(request domain.SearchRequest) (string, error) {
 				return bing.BuildSearchURL(configValue.BingURL, request)
 			})
@@ -350,10 +351,11 @@ func buildBingPool(configValue config.Config, artifacts bing.ArtifactStore, head
 func buildBravePool(configValue config.Config, artifacts brave.ArtifactStore, headers headerprofile.Pool) (*profilepool.Pool, error) {
 	return buildBrowserPool(domain.ProviderNameBrave, normalizedPositive(configValue.BraveProfileCount, 3), normalizedPositive(configValue.BraveProfileCapacity, 1), configValue.BraveProfileDir, filepath.Join(configValue.ProfileManifestRoot, string(domain.ProviderNameBrave)), configValue.ProviderRate, configValue.ProviderBurst,
 		func(profileDir string) (profilepool.Searcher, func() error, error) {
+			profileID := filepath.Base(profileDir)
 			client, err := chromebrowser.New(chromebrowser.Config{
 				ProfileDir: profileDir, ExecPath: configValue.ChromePath, Timeout: configValue.BraveTimeout,
 				Headless: configValue.ChromeHeadless, DisableSandbox: configValue.ChromeNoSandbox,
-				MaxBodyBytes: int(configValue.MaxBodyBytes), MaxConcurrentTabs: normalizedPositive(configValue.BraveProfileCapacity, 1), HeaderProfiles: headers,
+				MaxBodyBytes: int(configValue.MaxBodyBytes), MaxConcurrentTabs: normalizedPositive(configValue.BraveProfileCapacity, 1), HeaderProfiles: headers, HeaderProfileKey: profileID,
 			}, func(request domain.SearchRequest) (string, error) {
 				return brave.BuildSearchURL(configValue.BraveURL, request)
 			})
@@ -419,7 +421,7 @@ func buildDuckDuckGoPool(configValue config.Config, headers headerprofile.Pool, 
 				return nil, err
 			}
 			client := &http.Client{Transport: baseTransport, Jar: jar}
-			searcher, err := duckduckgo.New(duckduckgo.Config{BaseURL: configValue.DuckDuckGoURL, UserAgent: configValue.UserAgent, Timeout: configValue.DuckDuckGoTimeout, MaxBodyBytes: configValue.MaxBodyBytes, HeaderProfiles: headers}, client)
+			searcher, err := duckduckgo.New(duckduckgo.Config{BaseURL: configValue.DuckDuckGoURL, UserAgent: configValue.UserAgent, Timeout: configValue.DuckDuckGoTimeout, MaxBodyBytes: configValue.MaxBodyBytes, HeaderProfiles: headers, HeaderProfileKey: id}, client)
 			if err != nil {
 				return nil, err
 			}

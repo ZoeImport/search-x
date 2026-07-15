@@ -33,6 +33,8 @@ type Config struct {
 	MaxBodyBytes   int
 	// HeaderProfiles selects a coherent, sticky request identity per logical request.
 	HeaderProfiles headerprofile.Pool
+	// HeaderProfileKey pins an Agent Profile to one coherent header identity.
+	HeaderProfileKey string
 }
 
 type Client struct {
@@ -190,7 +192,11 @@ func (c *Client) selectHeaderProfile(request domain.SearchRequest, attempt int) 
 	if c.config.HeaderProfiles == nil {
 		return headerprofile.Profile{}, fmt.Errorf("chromedp header profile pool is nil")
 	}
-	key := request.RequestID
+	key := c.config.HeaderProfileKey
+	if key != "" {
+		return c.config.HeaderProfiles.Select(key, attempt)
+	}
+	key = request.RequestID
 	if key == "" {
 		key = request.Query
 	}

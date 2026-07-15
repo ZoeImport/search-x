@@ -15,6 +15,7 @@ import (
 type Config struct {
 	AutoWait             time.Duration
 	MaxProviderAttempts  int
+	MaxAgentAttempts     int
 	MinimumAttemptBudget time.Duration
 	Now                  func() time.Time
 	AutoQueueMax         int
@@ -50,6 +51,9 @@ func New(pools []Pool, config Config) (*Router, error) {
 	if config.MaxProviderAttempts <= 0 {
 		config.MaxProviderAttempts = 3
 	}
+	if config.MaxAgentAttempts <= 0 {
+		config.MaxAgentAttempts = 2
+	}
 	if config.MinimumAttemptBudget <= 0 {
 		config.MinimumAttemptBudget = 3 * time.Second
 	}
@@ -72,10 +76,13 @@ func (router *Router) Search(ctx context.Context, request domain.SearchRequest) 
 		}
 	}
 	attempted := make(map[domain.ProviderName]struct{}, router.config.MaxProviderAttempts)
+	agentAttempts := make(map[domain.ProviderName]int)
+	excludedProfiles := make(map[domain.ProviderName]string)
+	routeRound := 0
 	var failures []error
 	var failedProviders []domain.ProviderName
 	for len(attempted) < router.config.MaxProviderAttempts && hasAttemptBudget(ctx, router.config.MinimumAttemptBudget, router.config.Now()) {
-		pool, lease := router.tryAcquire(request.RequestID, attempted)
+		pool, lease := router.tryAcquire(request.RequestID, attempted, excludedProfiles)
 		if lease == nil {
 			depth := router.queued.Add(1)
 			if depth > int64(router.config.AutoQueueMax) {
@@ -87,16 +94,17 @@ func (router *Router) Search(ctx context.Context, request domain.SearchRequest) 
 			cancel()
 			router.queued.Add(-1)
 			if lease == nil {
-				pool, lease = router.tryAcquire(request.RequestID, attempted)
+				pool, lease = router.tryAcquire(request.RequestID, attempted, excludedProfiles)
 			}
 			if lease == nil {
 				break
 			}
 		}
-		attempted[pool.Provider()] = struct{}{}
-		leaseID := fmt.Sprintf("%s-%s-%d", request.RequestID, lease.ProfileID(), len(attempted))
+		routeRound++
+		agentAttempts[pool.Provider()]++
+		leaseID := fmt.Sprintf("%s-%s-%d", request.RequestID, lease.ProfileID(), routeRound)
 		before := lease.Snapshot()
-		if err := router.trace(ctx, request, searchtrace.Event{Type: "route_decision", Provider: string(pool.Provider()), ProfileID: lease.ProfileID(), Fields: map[string]any{"route_round": len(attempted), "route_reason": domain.RouteReasonPriority}}); err != nil {
+		if err := router.trace(ctx, request, searchtrace.Event{Type: "route_decision", Provider: string(pool.Provider()), ProfileID: lease.ProfileID(), Fields: map[string]any{"route_round": routeRound, "route_reason": domain.RouteReasonPriority}}); err != nil {
 			lease.Release(profilepool.Result{Classification: domain.ClassificationNetworkError, FinishedAt: router.config.Now()})
 			return domain.SearchResponse{}, traceError(err)
 		}
@@ -120,7 +128,7 @@ func (router *Router) Search(ctx context.Context, request domain.SearchRequest) 
 		}
 		if err == nil && len(response.Results) > 0 {
 			_ = router.trace(ctx, request, searchtrace.Event{Type: "shadow_route_compare", Provider: string(pool.Provider()), Fields: map[string]any{"predicted_provider": shadowProvider, "matched": shadowProvider == pool.Provider()}})
-			annotateDebugAttempts(&response, pool.Provider(), lease.ProfileID(), leaseID, len(attempted))
+			annotateDebugAttempts(&response, pool.Provider(), lease.ProfileID(), leaseID, routeRound)
 			return router.prepareSuccess(response, lease, pool.Provider(), failedProviders), nil
 		}
 		if err == nil {
@@ -129,6 +137,11 @@ func (router *Router) Search(ctx context.Context, request domain.SearchRequest) 
 		if !reroutable(err) {
 			return domain.SearchResponse{}, err
 		}
+		excludedProfiles[pool.Provider()] = lease.ProfileID()
+		if agentAttempts[pool.Provider()] < router.config.MaxAgentAttempts && hasAlternativeProfile(pool, lease.ProfileID()) {
+			continue
+		}
+		attempted[pool.Provider()] = struct{}{}
 		failures = append(failures, fmt.Errorf("provider %s: %w", pool.Provider(), err))
 		failedProviders = append(failedProviders, pool.Provider())
 	}
@@ -254,16 +267,25 @@ func (router *Router) prepareSuccess(response domain.SearchResponse, lease *prof
 	return response
 }
 
-func (router *Router) tryAcquire(requestID string, attempted map[domain.ProviderName]struct{}) (Pool, *profilepool.Lease) {
+func (router *Router) tryAcquire(requestID string, attempted map[domain.ProviderName]struct{}, excludedProfiles map[domain.ProviderName]string) (Pool, *profilepool.Lease) {
 	for _, pool := range router.pools {
 		if _, exists := attempted[pool.Provider()]; exists {
 			continue
 		}
-		if lease, ok := pool.TryAcquireAuto(requestID); ok {
+		if lease, ok := pool.TryAcquireAutoExcept(requestID, excludedProfiles[pool.Provider()]); ok {
 			return pool, lease
 		}
 	}
 	return nil, nil
+}
+
+func hasAlternativeProfile(pool Pool, excludedProfileID string) bool {
+	for _, profile := range pool.Snapshot().Profiles {
+		if profile.ID != excludedProfileID && (profile.State == profilepool.StateProbation || profile.State == profilepool.StateTrusted) && profile.InFlight < profile.Capacity {
+			return true
+		}
+	}
+	return false
 }
 
 func (router *Router) waitAny(ctx context.Context, attempted map[domain.ProviderName]struct{}) Pool {

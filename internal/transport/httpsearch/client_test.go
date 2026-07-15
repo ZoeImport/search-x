@@ -102,16 +102,16 @@ func TestClientFetchUsesStickyHeaderProfile(t *testing.T) {
 		_, _ = io.WriteString(w, "ok")
 	}))
 	defer server.Close()
-	pool, err := headerprofile.NewStaticPool([]headerprofile.Profile{{
-		Name: "pooled", UserAgent: "pooled-agent", AcceptLanguage: "en-US,en;q=0.9",
-		Headers: map[string]string{"Accept": "text/html", "X-Test-Profile": "profile-value"},
-	}})
+	pool, err := headerprofile.NewStaticPool([]headerprofile.Profile{
+		{Name: "pooled", UserAgent: "pooled-agent", AcceptLanguage: "en-US,en;q=0.9", Headers: map[string]string{"Accept": "text/html", "X-Test-Profile": "profile-value"}},
+		{Name: "other", UserAgent: "other-agent", AcceptLanguage: "zh-CN", Headers: map[string]string{"Accept": "text/html"}},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	client, err := New(Config{
 		Name: "desktop_http", BaseURL: server.URL, Timeout: time.Second,
-		MaxBodyBytes: 1024, HeaderProfiles: pool,
+		MaxBodyBytes: 1024, HeaderProfiles: pool, HeaderProfileKey: "agent-0001",
 	}, server.Client())
 	if err != nil {
 		t.Fatal(err)
@@ -120,8 +120,9 @@ func TestClientFetchUsesStickyHeaderProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.HeaderProfile != "pooled" {
-		t.Fatalf("header profile=%q", got.HeaderProfile)
+	expected, _ := pool.Select("agent-0001", 0)
+	if got.HeaderProfile != string(expected.Name) {
+		t.Fatalf("header profile=%q expected=%q", got.HeaderProfile, expected.Name)
 	}
 }
 

@@ -207,15 +207,20 @@ func (pool *Pool) Provider() domain.ProviderName { return pool.provider }
 
 // TryAcquire atomically selects a serving profile and reserves one slot.
 func (pool *Pool) TryAcquire(requestID string) (*Lease, bool) {
-	return pool.tryAcquire(requestID, false, false)
+	return pool.tryAcquire(requestID, false, false, "")
 }
 
 // TryAcquireAuto reserves a slot for automatic routing and resets explicit preference streak.
 func (pool *Pool) TryAcquireAuto(requestID string) (*Lease, bool) {
-	return pool.tryAcquire(requestID, true, false)
+	return pool.tryAcquire(requestID, true, false, "")
 }
 
-func (pool *Pool) tryAcquire(requestID string, automatic, explicit bool) (*Lease, bool) {
+// TryAcquireAutoExcept reserves a serving profile other than excludedProfileID.
+func (pool *Pool) TryAcquireAutoExcept(requestID, excludedProfileID string) (*Lease, bool) {
+	return pool.tryAcquire(requestID, true, false, excludedProfileID)
+}
+
+func (pool *Pool) tryAcquire(requestID string, automatic, explicit bool, excludedProfileID string) (*Lease, bool) {
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
 	if pool.closed || !pool.manifestHealthy {
@@ -229,13 +234,13 @@ func (pool *Pool) tryAcquire(requestID string, automatic, explicit bool) (*Lease
 	if bucket(requestID) < pool.config.TrustedTrafficPercent {
 		preferred = StateTrusted
 	}
-	selected := pool.selectEntry(preferred)
+	selected := pool.selectEntry(preferred, excludedProfileID)
 	if selected == nil {
 		fallback := StateTrusted
 		if preferred == StateTrusted {
 			fallback = StateProbation
 		}
-		selected = pool.selectEntry(fallback)
+		selected = pool.selectEntry(fallback, excludedProfileID)
 	}
 	if selected == nil {
 		return nil, false
@@ -279,7 +284,7 @@ func (pool *Pool) saveManifest(value *entry) error {
 // Acquire waits for a profile slot or context cancellation.
 func (pool *Pool) Acquire(ctx context.Context, requestID string) (*Lease, error) {
 	for {
-		if lease, ok := pool.tryAcquire(requestID, false, true); ok {
+		if lease, ok := pool.tryAcquire(requestID, false, true, ""); ok {
 			return lease, nil
 		}
 		pool.mu.Lock()
@@ -300,7 +305,7 @@ func (pool *Pool) AcquireAuto(ctx context.Context, requestID string) (*Lease, er
 	pool.mu.Unlock()
 	defer func() { pool.mu.Lock(); pool.autoWaiters--; pool.mu.Unlock() }()
 	for {
-		if lease, ok := pool.tryAcquire(requestID, true, false); ok {
+		if lease, ok := pool.tryAcquire(requestID, true, false, ""); ok {
 			return lease, nil
 		}
 		pool.mu.Lock()
@@ -331,10 +336,10 @@ func (pool *Pool) WaitAvailable(ctx context.Context) error {
 	}
 }
 
-func (pool *Pool) selectEntry(state State) *entry {
+func (pool *Pool) selectEntry(state State, excludedProfileID string) *entry {
 	var selected *entry
 	for _, candidate := range pool.profiles {
-		if candidate.state != state || candidate.inFlight >= candidate.profile.Capacity() {
+		if candidate.profile.ID() == excludedProfileID || candidate.state != state || candidate.inFlight >= candidate.profile.Capacity() {
 			continue
 		}
 		if selected == nil || lessLoaded(candidate, selected) {

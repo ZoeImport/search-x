@@ -16,6 +16,7 @@ type Pool interface {
 	Provider() domain.ProviderName
 	TryAcquire(string) (*profilepool.Lease, bool)
 	TryAcquireAuto(string) (*profilepool.Lease, bool)
+	TryAcquireAutoExcept(string, string) (*profilepool.Lease, bool)
 	Acquire(context.Context, string) (*profilepool.Lease, error)
 	AcquireAuto(context.Context, string) (*profilepool.Lease, error)
 	WaitAvailable(context.Context) error

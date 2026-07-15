@@ -16,6 +16,7 @@ type routeProfile struct {
 	provider domain.ProviderName
 	response domain.SearchResponse
 	err      error
+	calls    *[]string
 }
 
 func (profile *routeProfile) ID() string                    { return profile.id }
@@ -23,6 +24,9 @@ func (profile *routeProfile) Provider() domain.ProviderName { return profile.pro
 func (*routeProfile) Capacity() int                         { return 1 }
 func (*routeProfile) Close() error                          { return nil }
 func (profile *routeProfile) Search(context.Context, domain.SearchRequest) (domain.SearchResponse, error) {
+	if profile.calls != nil {
+		*profile.calls = append(*profile.calls, profile.id)
+	}
 	return profile.response, profile.err
 }
 
@@ -60,6 +64,23 @@ func TestRouterReroutesRetryableFailure(t *testing.T) {
 	}
 	if got.Provider != domain.ProviderNameBing || got.Meta.ProviderFallbackCount != 1 || got.Meta.RouteReason != domain.RouteReasonRetryReroute {
 		t.Fatalf("response=%+v", got)
+	}
+}
+
+func TestRouterRetriesRetryableFailureWithAnotherProfileOfSameProvider(t *testing.T) {
+	calls := make([]string, 0, 2)
+	failed := &routeProfile{id: "baidu-a", provider: domain.ProviderNameBaidu, err: &domain.SearchError{Code: domain.ErrRateLimited, Message: "rate limited", Retryable: true}, calls: &calls}
+	succeeded := &routeProfile{id: "baidu-b", provider: domain.ProviderNameBaidu, response: response(domain.ProviderNameBaidu), calls: &calls}
+
+	got, err := mustRouter(t, routePool(t, failed, succeeded)).Search(context.Background(), domain.SearchRequest{RequestID: "request"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Provider != domain.ProviderNameBaidu || got.Meta.ProfileID != "baidu-b" || got.Meta.ProviderFallbackCount != 0 {
+		t.Fatalf("response=%+v", got)
+	}
+	if fmt.Sprint(calls) != "[baidu-a baidu-b]" {
+		t.Fatalf("profile call order=%v", calls)
 	}
 }
 

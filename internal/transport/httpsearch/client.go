@@ -26,6 +26,8 @@ type Config struct {
 	MaxBodyBytes int64
 	// HeaderProfiles overrides static request headers with a sticky profile.
 	HeaderProfiles headerprofile.Pool
+	// HeaderProfileKey pins an Agent Profile to one coherent header identity.
+	HeaderProfileKey string
 }
 
 type Client struct {
@@ -78,7 +80,7 @@ func (c *Client) Fetch(ctx context.Context, request domain.SearchRequest) (trans
 	httpRequest.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
 	httpRequest.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.7")
 	if c.config.HeaderProfiles != nil {
-		profile, selectErr := c.config.HeaderProfiles.Select(profileKey(request), 0)
+		profile, selectErr := c.config.HeaderProfiles.Select(c.headerProfileKey(request), 0)
 		if selectErr != nil {
 			return response, fmt.Errorf("select %s header profile: %w", c.Name(), selectErr)
 		}
@@ -117,6 +119,13 @@ func (c *Client) Fetch(ctx context.Context, request domain.SearchRequest) (trans
 	}
 	response.Body = limited
 	return response, nil
+}
+
+func (c *Client) headerProfileKey(request domain.SearchRequest) string {
+	if c.config.HeaderProfileKey != "" {
+		return c.config.HeaderProfileKey
+	}
+	return profileKey(request)
 }
 
 func profileKey(request domain.SearchRequest) string {

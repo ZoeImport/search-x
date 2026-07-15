@@ -95,6 +95,21 @@ func TestNewChromiumDesktopPoolBuildsCoherentClientHints(t *testing.T) {
 	}
 }
 
+func TestNewChromiumDesktopPoolUsesDistinctCoherentUserAgents(t *testing.T) {
+	pool, err := NewChromiumDesktopPool("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7871.115 Safari/537.36")
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary := pool.profiles[0]
+	secondary := pool.profiles[1]
+	if primary.UserAgent == secondary.UserAgent {
+		t.Fatalf("profiles must use distinct user agents: %q", primary.UserAgent)
+	}
+	if secondary.Platform != "Win32" || secondary.ClientHints == nil || secondary.ClientHints.Platform != "Windows" {
+		t.Fatalf("secondary profile is not Windows-coherent: %+v", secondary)
+	}
+}
+
 func TestNewChromiumDesktopPoolRejectsNonChromiumUserAgent(t *testing.T) {
 	if _, err := NewChromiumDesktopPool("curl/8.0"); err == nil {
 		t.Fatal("expected Chromium user agent validation error")

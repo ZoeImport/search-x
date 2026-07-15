@@ -30,6 +30,8 @@ type Config struct {
 	MaxBodyBytes int64
 	// HeaderProfiles selects a sticky outbound request profile.
 	HeaderProfiles headerprofile.Pool
+	// HeaderProfileKey pins an Agent Profile to one coherent header identity.
+	HeaderProfileKey string
 }
 
 // Provider searches DuckDuckGo's public HTML result page.
@@ -83,11 +85,7 @@ func (p *Provider) Search(ctx context.Context, request domain.SearchRequest) (do
 	httpRequest.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.7")
 	selectedProfile := ""
 	if p.config.HeaderProfiles != nil {
-		key := request.RequestID
-		if key == "" {
-			key = request.Query
-		}
-		profile, selectErr := p.config.HeaderProfiles.Select(key, 0)
+		profile, selectErr := p.config.HeaderProfiles.Select(p.headerProfileKey(request), 0)
 		if selectErr != nil {
 			attempt := domain.Attempt{Provider: p.Name(), Transport: domain.TransportNameDuckDuckGoHTTP, RequestURL: requestURL}
 			attempt.OriginalError = selectErr.Error()
@@ -164,6 +162,16 @@ func (p *Provider) Search(ctx context.Context, request domain.SearchRequest) (do
 		response.Debug = &domain.Debug{Attempts: []domain.Attempt{attempt}}
 	}
 	return response, nil
+}
+
+func (p *Provider) headerProfileKey(request domain.SearchRequest) string {
+	if p.config.HeaderProfileKey != "" {
+		return p.config.HeaderProfileKey
+	}
+	if request.RequestID != "" {
+		return request.RequestID
+	}
+	return request.Query
 }
 
 func (p *Provider) buildURL(request domain.SearchRequest) (string, error) {

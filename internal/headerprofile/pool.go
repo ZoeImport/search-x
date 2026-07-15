@@ -77,8 +77,9 @@ func NewBaiduFixedSessionProfile(userAgent string) (Profile, error) {
 }
 
 // NewChromiumDesktopPool builds two coherent desktop profiles around one
-// deployment-controlled Chromium user agent. The variants keep UA and client
-// hints aligned while varying only language and common viewport dimensions.
+// deployment-controlled Chromium user agent. The variants use distinct but
+// compatible desktop UAs, so a separately persisted Agent Profile can keep a
+// stable complete browser identity rather than changing only its cookies.
 func NewChromiumDesktopPool(userAgent string) (*StaticPool, error) {
 	userAgent = strings.TrimSpace(userAgent)
 	match := chromiumVersionPattern.FindStringSubmatch(userAgent)
@@ -106,6 +107,12 @@ func NewChromiumDesktopPool(userAgent string) (*StaticPool, error) {
 		"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
 		"Upgrade-Insecure-Requests": "1",
 	}
+	secondaryUserAgent := alternateDesktopUserAgent(userAgent)
+	secondaryPlatform, secondaryHintPlatform, secondaryPlatformVersion, secondaryArchitecture := chromiumPlatform(secondaryUserAgent)
+	secondaryHints := cloneClientHints(hints)
+	secondaryHints.Platform = secondaryHintPlatform
+	secondaryHints.PlatformVersion = secondaryPlatformVersion
+	secondaryHints.Architecture = secondaryArchitecture
 	return NewStaticPool([]Profile{
 		{
 			Name: NameChromeDesktopPrimary, UserAgent: userAgent,
@@ -114,12 +121,31 @@ func NewChromiumDesktopPool(userAgent string) (*StaticPool, error) {
 			ViewportWidth: 1440, ViewportHeight: 900, DeviceScaleFactor: 2,
 		},
 		{
-			Name: NameChromeDesktopSecondary, UserAgent: userAgent,
-			AcceptLanguage: "en-US,en;q=0.9,zh-CN;q=0.7", Platform: platform,
-			Headers: commonHeaders, ClientHints: hints,
+			Name: NameChromeDesktopSecondary, UserAgent: secondaryUserAgent,
+			AcceptLanguage: "en-US,en;q=0.9,zh-CN;q=0.7", Platform: secondaryPlatform,
+			Headers: commonHeaders, ClientHints: secondaryHints,
 			ViewportWidth: 1366, ViewportHeight: 768, DeviceScaleFactor: 1,
 		},
 	})
+}
+
+func alternateDesktopUserAgent(userAgent string) string {
+	const macOS = "(Macintosh; Intel Mac OS X 10_15_7)"
+	const windows = "(Windows NT 10.0; Win64; x64)"
+	if strings.Contains(userAgent, macOS) {
+		return strings.Replace(userAgent, macOS, windows, 1)
+	}
+	if strings.Contains(userAgent, windows) {
+		return strings.Replace(userAgent, windows, macOS, 1)
+	}
+	return userAgent
+}
+
+func cloneClientHints(hints *ClientHints) *ClientHints {
+	clone := *hints
+	clone.Brands = append([]BrandVersion(nil), hints.Brands...)
+	clone.FullVersionList = append([]BrandVersion(nil), hints.FullVersionList...)
+	return &clone
 }
 
 func chromiumPlatform(userAgent string) (platform string, hintPlatform string, platformVersion string, architecture string) {
@@ -185,10 +211,7 @@ func cloneProfile(profile Profile) Profile {
 		}
 	}
 	if profile.ClientHints != nil {
-		hints := *profile.ClientHints
-		hints.Brands = append([]BrandVersion(nil), profile.ClientHints.Brands...)
-		hints.FullVersionList = append([]BrandVersion(nil), profile.ClientHints.FullVersionList...)
-		clone.ClientHints = &hints
+		clone.ClientHints = cloneClientHints(profile.ClientHints)
 	}
 	return clone
 }
