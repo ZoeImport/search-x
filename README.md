@@ -1,8 +1,8 @@
 # Web Search Backend Demo
 
-一个面向人类客户端和 AI Agent 的 Go + Gin 网页搜索 API。项目通过通用 `Provider` 接口注册 Baidu、DuckDuckGo、Bing、Brave 和自动 fallback Chain。
+一个面向人类客户端和 AI Agent 的 Go + Gin 网页搜索 API。项目通过通用 `Provider` 接口注册 Baidu、DuckDuckGo、Bing、Brave，并通过容量感知的 `auto` Router 统一调度。
 
-当前实现不使用付费 SERP API。搜索链路读取公开搜索结果页，并通过跨 Provider fallback、Provider 质量选择、超额候选、Provider 内部 transport fallback、缓存、限流、抖动和熔断提供 best-effort 可用性；独立的 Read API 可按需读取某条结果的 HTML/纯文本正文并转换为 Markdown 或 text。
+当前实现不使用付费 SERP API。搜索链路读取公开搜索结果页，并通过跨 Provider fallback、Provider 内部多 Agent Profile 池化调度、Provider 质量选择、超额候选、Provider 内部 transport fallback、缓存、限流、抖动和熔断提供 best-effort 可用性；独立的 Read API 可按需读取某条结果的 HTML/纯文本正文并转换为 Markdown 或 text。
 
 ## 架构
 
@@ -12,11 +12,24 @@ flowchart TD
     Gin --> Service["SearchService"]
     Service --> Fresh["Fresh Cache"]
     Service --> Registry["Provider Registry"]
-    Registry --> Auto["ProviderChain: auto"]
-    Auto --> Baidu["BaiduProvider"]
-    Auto --> Bing["BingProvider"]
-    Auto --> Brave["BraveProvider"]
-    Auto --> Duck["DuckDuckGoProvider"]
+    Registry --> Auto["routing.Router: auto"]
+    Registry --> Explicit["PooledProvider: baidu/bing/brave/duckduckgo"]
+    Auto --> BaiduPool["profilepool.Pool: baidu"]
+    Auto --> BingPool["profilepool.Pool: bing"]
+    Auto --> BravePool["profilepool.Pool: brave"]
+    Auto --> DuckPool["profilepool.Pool: duckduckgo"]
+    Explicit --> BaiduPool
+    Explicit --> BingPool
+    Explicit --> BravePool
+    Explicit --> DuckPool
+    BaiduPool --> Lease["Lease: Probation/Trusted/Degraded/Quarantined/Draining/Retired"]
+    BingPool --> Lease
+    BravePool --> Lease
+    DuckPool --> Lease
+    Lease --> Baidu["BaiduProvider"]
+    Lease --> Bing["BingProvider"]
+    Lease --> Brave["BraveProvider"]
+    Lease --> Duck["DuckDuckGoProvider"]
     Baidu --> Desktop["Desktop HTTP"]
     Desktop -->|失败| Mobile["Mobile HTTP"]
     Mobile -->|失败| Chrome["Chromedp"]
@@ -26,6 +39,12 @@ flowchart TD
     Duck --> DuckHTTP["DuckDuckGo HTML HTTP"]
     Bing --> BingChrome["Bing Chromedp"]
     Brave --> BraveChrome["Brave Chromedp"]
+    Auto --> Trace["searchtrace.Manager: spool + SQLite + JSON log"]
+    Explicit --> Trace
+    BaiduPool --> Manifest["ManifestStore: 每 Profile 磁盘持久化信任状态"]
+    BingPool --> Manifest
+    BravePool --> Manifest
+    DuckPool --> Manifest
     Gin --> Combined["SearchContentService"]
     Combined --> Quality["Unicode/CJK Quality Selector"]
     Quality --> Registry
@@ -45,10 +64,11 @@ flowchart TD
 职责边界：
 
 - Gin：路由、query binding、request ID、客户端限流和 JSON 编码。
-- SearchService：参数归一化、fresh/stale cache 和 `singleflight`。
-- Provider Registry：按名称查找 `auto`、`baidu`、`bing`、`brave` 和 `duckduckgo`。
-- Capacity-aware Provider Router：`auto` 严格按 `baidu → bing → brave → duckduckgo` 选择拥有可用 Profile permit 的 Provider；显式 Provider 不跨源 fallback。
-- BaiduProvider：编排 `desktop_http → mobile_http → chromedp`。
+- SearchService：参数归一化、fresh/stale cache、`singleflight`，以及基于 `SEARCH_GLOBAL_INFLIGHT_MAX`/`SEARCH_AUTO_QUEUE_MAX` 的全局在飞请求闸门（Live Guard）。
+- Provider Registry：按名称查找 `auto`、`baidu`、`bing`、`brave` 和 `duckduckgo`；显式 Provider 都是包一层 `profilepool.Pool` 的 `PooledProvider`。
+- `routing.Router`（`auto`）：容量感知路由，见下方「容量感知路由与 Profile 池」。
+- `profilepool.Pool`：每个 Provider 一个池，内部管理若干 Agent Profile 的信任状态机、容量、限速和磁盘 manifest 持久化。
+- BaiduProvider：编排 `desktop_http → mobile_http → chromedp`（固定 Session 策略优先，退回 Header Profile Pool 备选策略）。
 - DuckDuckGoProvider：读取轻量 HTML 搜索页，不启动浏览器。
 - BingProvider：使用独立 Chromedp Profile 读取 Bing 结果页。
 - BraveProvider：使用独立 Chromedp Profile 读取 Brave 公开结果页。
@@ -57,8 +77,45 @@ flowchart TD
 - Detector：区分正常页、空结果、验证码、429、封禁和 DOM 变化。
 - Parser：分别解析桌面页、移动页和浏览器 DOM。
 - DebugArtifactStore：保存完整 HTML、截图以及 SHA-256。
+- `searchtrace.Manager`：记录路由/池/Provider 每个决策点的 trace，见下方「Search Trace」。
 - ReadService：执行 URL 安全策略、正文缓存、HTTP 优先读取、Chromedp 按需渲染、提取、质量判断和格式转换；HTTPReader 与 BrowserReader 通过统一接口解耦。
 - Read Pipeline：`URLPolicy`、`ResourceReader`、`SourceTypeDetector`、`ContentExtractor`、`QualityEvaluator`、`ContentConverter`、`ReadCache` 均通过窄接口解耦。
+
+## 容量感知路由与 Profile 池
+
+搜索侧的路由不再是简单的固定优先级 fallback chain，而是 `internal/routing.Router` + `internal/profilepool.Pool` 的两层结构。完整设计背景、已验证事实和验收记录见 `docs/provider-profile-pool-routing-design.md`。
+
+**Provider Profile Pool**（`internal/profilepool`）：每个 Provider（baidu/bing/brave/duckduckgo）持有一个 `Pool`，池内是若干 Agent Profile（不只是 UA，还绑定并发容量、独立 Chrome/Cookie 身份）。每个 Profile 有一个信任状态机：
+
+```
+warming → probation ⇄ trusted
+              ↓  连续失败超过阈值               ↓ CAPTCHA / 限流
+          degraded（冷却后重试，超过重试上限则 draining → retired）
+          quarantined（冷却后重试，超过重试上限则 draining → retired）
+```
+
+- `TryAcquire`/`Acquire` 从池里租出一个 `Lease`（独占一个容量槽位），请求结束后必须 `Release` 并带上分类结果（`normal`/`empty`/`captcha`/`rate_limited`/`blocked`/`parse_changed`/`timeout`/`network_error`），驱动 EWMA 信任分和状态迁移。
+- `probation` 达到最小样本数、成功率和近期 EWMA 阈值后升级为 `trusted`；`TrustedTrafficPercent`（默认 80%）流量按 `request_id` 哈希桶优先分配给 `trusted` Profile，其余分给 `probation`，为新 Profile 持续攒经验值。
+- CAPTCHA/限流直接进入 `quarantined`（默认冷却 5 分钟）；连续失败超过 `MaxConsecutiveFailures`（默认 3 次）进入 `degraded`（默认冷却 1 分钟）；冷却后重试次数超过 `MaxRecoveryAttempts`（默认 3 次）则 `draining` 直到在飞请求清零后 `retired`。
+- 每个 Profile 的信任状态和统计量落盘到 `SEARCH_PROFILE_MANIFEST_ROOT`（每 Provider 一个子目录，每 Profile 一个 JSON 文件，原子写入），进程重启后按时间衰减恢复，避免频繁重启导致 Profile 反复回到 `probation` 冷启动。
+
+**Router**（`internal/routing`，Provider 名字固定为 `auto`）：
+
+- 严格按 `baidu → bing → brave → duckduckgo` 顺序尝试从各自池 `TryAcquireAuto`；某个池暂时没有可用 Lease 就跳过，不等待。
+- 全部池都拿不到时，短暂 `AcquireAuto`（默认 `SEARCH_AUTO_ROUTE_WAIT=2s`）等待任意一个池释放槽位；等待前先对全局排队深度做 `SEARCH_AUTO_QUEUE_MAX`（默认 100）限流，超过直接返回 `search_queue_full`。
+- 只对 CAPTCHA、限流、上游结构变化（`upstream_changed`）、Provider 不可用、超时这几类 retryable 错误做跨 Provider 重路由（`MaxProviderAttempts`，默认 3 次）；其它错误直接返回给调用方。
+- 显式指定 Provider（非 `auto`）走 `routing.PooledProvider`，只在该 Provider 自己的池里等待（默认 `SEARCH_EXPLICIT_ROUTE_WAIT=5s`），拿不到 Lease 返回 `provider_busy`；不跨源 fallback。为避免显式请求长期抢占 `auto` 的等待名额，池内部对连续 3 次显式抢占之后会短暂让路给已在排队的 `auto` 等待者。
+- `SEARCH_CAPACITY_ROUTER_ENABLED=false` 时退回旧的固定优先级 `provider.Chain`（不做容量感知等待，也不区分 Profile 信任状态）；`SEARCH_PROFILE_POOL_ENABLED=false` 时每个 Provider 强制退化为 1 个 Profile、容量 1，相当于关闭多 Profile 并发和信任状态机。
+
+## Search Trace
+
+`internal/searchtrace` 给路由和池的每个决策点（`route_decision`、`lease_acquired`、`provider_attempt`、`lease_released`、`shadow_route_decision`/`shadow_route_compare` 等）写持久化事件，用于事后排障和信任状态审计：
+
+- 写入路径是 NDJSON spool（`SEARCH_TRACE_ROOT/spool/events.ndjson`，每条 `fsync`）→ 异步消费进 SQLite（`SEARCH_TRACE_ROOT/search-trace.db`）→ 同时写一份按天滚动的 JSON 日志（`SEARCH_TRACE_ROOT/logs/`）。进程启动时会先 `Replay` 未消费完的 spool 记录，保证不丢事件。
+- `SEARCH_TRACE_FAILURE_MODE=strict`（默认）：trace 写入失败会让当前搜索请求本身失败（`trace_persistence_unavailable`），确保 trace 和实际路由行为一致；`best_effort` 则只记录失败但不影响搜索请求。
+- `SEARCH_TRACE_STORE_QUERY=false`（默认）：只落盘查询词的 SHA-256、长度和脱敏 preview（数字被替换为 `*`），不存原始查询词；设为 `true` 才存原文。
+- 保留策略按小时任务清理：`SEARCH_TRACE_REQUEST_RETENTION`（默认 7 天）清理整条请求 trace，`SEARCH_TRACE_PROFILE_RETENTION`（默认 30 天）清理 Profile 健康事件，`SEARCH_TRACE_SQLITE_MAX_BYTES` 设置后超出会按最旧 trace 优先删除并 `VACUUM`。
+- 同一小时任务里，各 Pool 也会做一次 `Reconcile`（到期的 `quarantined`/`degraded` Profile 恢复到 `probation` 重试）。
 
 ## 本机运行
 
@@ -173,6 +230,10 @@ docker-compose down --volumes
     "degraded": false,
     "fallback_count": 0,
     "provider_fallback_count": 0,
+    "selected_provider": "baidu",
+    "route_reason": "priority",
+    "profile_id": "baidu-0003",
+    "provider_queue_ms": 0,
     "took_ms": 382,
     "request_id": "req_01J..."
   },
@@ -185,6 +246,8 @@ docker-compose down --volumes
 ```
 
 顶层 `provider` 是本次结果集的实际搜索源；每条 `results[].provider` 是该条内容的来源；`requested_provider` 是调用方选择的值。`fallback_count` 表示单个 Provider 内部 transport fallback 次数，`provider_fallback_count` 表示跨 Provider fallback 次数。
+
+`selected_provider` 是路由最终选中的 Provider（`auto` 场景下等价于顶层 `provider`）。`route_reason` 说明选择原因：`explicit`（调用方显式指定）、`priority`（`auto` 按严格优先级首次命中）、`retry_reroute`（`auto` 因前序 Provider 失败重路由，此时 `meta.degraded=true` 并附带 `provider_fallback` warning）。`profile_id` 是本次实际租用的 Agent Profile（如 `baidu-0003`），`provider_queue_ms` 是本次请求等待 Profile Lease 的排队耗时（显式 Provider 才计算，`auto` 场景恒为 0）。授权 Debug 响应里 `debug.attempts[*]` 还会带上 `profile_id`、`lease_id` 和 `route_round`（本次是第几轮尝试的 Provider）。
 
 `transport` 可能是 `desktop_http`、`mobile_http`、`chromedp`、`duckduckgo_http`、`bing_chromedp`、`brave_chromedp`、`fresh_cache` 或 `stale_cache`。
 
@@ -361,6 +424,10 @@ SSRF 防护会拒绝私网、回环、link-local、CGNAT、Metadata、组播、�
 | 502 | `upstream_changed` | 百度 DOM 变化导致解析失效 |
 | 503 | `captcha_required` | 百度要求安全验证且没有 stale cache |
 | 503 | `provider_unavailable` | 所有 Transport 不可用或处于熔断状态 |
+| 503 | `provider_busy` | 显式指定的 Provider 在等待窗口内没有可用 Profile Lease |
+| 503 | `provider_capacity_exhausted` | `auto` 路由尝试次数用尽仍没有 Provider 拿到 Lease 或全部重路由失败 |
+| 503 | `search_queue_full` | `auto` 路由的等待队列已达 `SEARCH_AUTO_QUEUE_MAX` 上限 |
+| 503 | `trace_persistence_unavailable` | `SEARCH_TRACE_FAILURE_MODE=strict` 时 trace 落盘失败 |
 | 504 | `upstream_timeout` | 整体搜索链路超时 |
 | 403 | `unsafe_url` | Read URL、DNS 结果或重定向目标不安全 |
 | 415 | `unsupported_content_type` | Read 第一阶段不支持 PDF、图片或 Office 文件 |
@@ -377,16 +444,15 @@ SSRF 防护会拒绝私网、回环、link-local、CGNAT、Metadata、组播、�
 - Fresh cache：15 分钟。
 - Stale cache：24 小时。
 - 相同查询使用 `singleflight` 合并并发请求。
-- BaiduProvider 首先使用固定 Session 策略：专用 `baidu_fixed_session` Header Profile、独立 CookieJar、首页 bootstrap、串行请求，响应结束后等待 3–5 秒；第一页不发送 `rn/pn` 参数。
-- 固定 Session 的 network、timeout、parse changed 会进入 Header Profile Pool 备选策略；CAPTCHA、429、403、503 直接交给跨 Provider fallback，不继续请求百度。
+- BaiduProvider 每个 Agent Profile 首先使用固定 Session 策略：专用 `baidu_fixed_session` Header Profile、独立 CookieJar、首页 bootstrap、串行请求，响应结束后等待 3–5 秒；第一页不发送 `rn/pn` 参数。
+- 固定 Session 的 network、timeout、parse changed 会进入该 Profile 自己的 Header Profile Pool 备选策略（`desktop_http → mobile_http → chromedp`）；CAPTCHA、429、403、503 直接交给 Profile Pool 的信任状态机（进入 `quarantined`）和跨 Provider fallback，不继续请求百度。
 - Header Profile Pool 备选策略保留每秒 1 次、burst 3 和 200–800 ms jitter；同一 `request_id` sticky。
-- DuckDuckGo、Bing、Brave、百度 Header Pool 和正文浏览器继续使用 Header Profile Pool；百度固定 Session 在创建时绑定 Primary profile，生命周期内不轮换。
+- DuckDuckGo、Bing、Brave、百度 Header Pool 和正文浏览器继续使用 Header Profile Pool；百度固定 Session 在创建时绑定该 Profile 自己的 Primary Header Profile，生命周期内不轮换。
 - 每个 profile 同时约束 `User-Agent`、`Accept-Language`、UA Client Hints、`navigator.platform` 和 viewport，避免只改 UA 造成字段冲突。
-- Profile Pool 不是验证码绕过器；上游已返回 CAPTCHA 时仍返回 `captcha_required`，由 `auto` 执行跨 Provider fallback。
-- CAPTCHA 对相应 Transport 熔断 30 分钟。
-- HTTP 429 对相应 Transport 熔断 5 分钟。
-- 搜索 Chromedp client 默认最多 2 个并发 tab，正文 Chromedp client 默认最多 3 个并发 tab。
-- Baidu、Bing、Brave 和正文读取使用不同的 Chrome Profile，Cookie 与 Session 不共享。
+- Profile Pool 不是验证码绕过器；上游已返回 CAPTCHA 时仍返回 `captcha_required`，触发对应 Agent Profile 进入 `quarantined`（默认冷却 5 分钟），并由 `auto` 执行跨 Provider fallback。
+- Baidu 固定 Session 内部另有一层 Transport 级熔断（`baidu.Breaker`）：CAPTCHA 熔断 30 分钟（`SEARCH_BAIDU_CAPTCHA_COOLDOWN`），限流/403/503 熔断 5 分钟（`SEARCH_BAIDU_RATE_LIMIT_COOLDOWN`），与 Profile Pool 的 `quarantined`/`degraded` 状态机是两层独立机制。
+- 每个 Provider 默认 4–6 个 Agent Profile 并发工作（各自独立容量），而非单一 UA 轮换；搜索 Chromedp client 默认最多 2 个并发 tab，正文 Chromedp client 默认最多 3 个并发 tab。
+- Baidu、Bing、Brave 和正文读取使用不同的 Chrome Profile，Cookie 与 Session 不共享；同一 Provider 内部不同 Agent Profile 之间也各自独立 Chrome/Cookie 身份。
 - `auto` 只对验证码、限流、超时、上游结构变化和 Provider 不可用执行跨源 fallback。
 - 实时失败且存在 stale cache 时返回 HTTP 200、`degraded=true`，并附带本次实时失败 attempts。
 
@@ -418,6 +484,31 @@ SSRF 防护会拒绝私网、回环、link-local、CGNAT、Metadata、组播、�
 | `SEARCH_BRAVE_URL` | `https://search.brave.com/search` | Brave 搜索地址 |
 | `SEARCH_BRAVE_TIMEOUT` | `10s` | Brave Chromedp 超时 |
 | `SEARCH_PROVIDER_BROWSER_SLOTS` | `2` | 每个搜索浏览器 client 的最大并发 tab 数 |
+| `SEARCH_CAPACITY_ROUTER_ENABLED` | `true` | `false` 退回旧的固定优先级 `provider.Chain`，不做容量感知等待 |
+| `SEARCH_PROFILE_POOL_ENABLED` | `true` | `false` 时每个 Provider 强制退化为 1 个 Profile、容量 1 |
+| `SEARCH_BAIDU_PROFILE_COUNT` | `6` | Baidu Agent Profile 数量 |
+| `SEARCH_BAIDU_PROFILE_CAPACITY` | `1` | 每个 Baidu Profile 的并发容量 |
+| `SEARCH_BING_PROFILE_COUNT` | `5` | Bing Agent Profile 数量 |
+| `SEARCH_BING_PROFILE_CAPACITY` | `2` | 每个 Bing Profile 的并发容量 |
+| `SEARCH_BRAVE_PROFILE_COUNT` | `3` | Brave Agent Profile 数量 |
+| `SEARCH_BRAVE_PROFILE_CAPACITY` | `1` | 每个 Brave Profile 的并发容量 |
+| `SEARCH_DUCKDUCKGO_PROFILE_COUNT` | `4` | DuckDuckGo Agent Profile 数量 |
+| `SEARCH_DUCKDUCKGO_PROFILE_CAPACITY` | `1` | 每个 DuckDuckGo Profile 的并发容量 |
+| `SEARCH_PROFILE_MANIFEST_ROOT` | `./var/provider-manifests` | 每个 Agent Profile 信任状态持久化根目录 |
+| `SEARCH_AUTO_ROUTE_WAIT` | `2s` | `auto` 在全部池暂时无可用 Lease 时的等待窗口 |
+| `SEARCH_EXPLICIT_ROUTE_WAIT` | `5s` | 显式指定 Provider 等待 Lease 的窗口，超时返回 `provider_busy` |
+| `SEARCH_MAX_PROVIDER_ATTEMPTS` | `3` | `auto` 跨 Provider 重路由的最大尝试次数 |
+| `SEARCH_MINIMUM_ATTEMPT_BUDGET` | `3s` | `auto` 判断是否还有预算发起下一次尝试的最小剩余时间 |
+| `SEARCH_AUTO_QUEUE_MAX` | `100` | `auto` 路由等待队列深度上限，超过返回 `search_queue_full` |
+| `SEARCH_GLOBAL_INFLIGHT_MAX` | `100` | 全局在飞搜索请求数上限（Live Guard） |
+| `SEARCH_TRACE_ENABLED` | `true` | 是否启用 Search Trace |
+| `SEARCH_TRACE_ROOT` | `./var/trace` | Trace spool/SQLite/日志根目录 |
+| `SEARCH_TRACE_FAILURE_MODE` | `strict` | `strict` 或 `best_effort`；`strict` 时 trace 写入失败会让搜索请求失败 |
+| `SEARCH_TRACE_STORE_QUERY` | `false` | `true` 时在 trace 里存原始查询词，默认只存哈希/长度/脱敏 preview |
+| `SEARCH_TRACE_REQUEST_RETENTION` | `168h` | 整条请求 trace 的保留时长 |
+| `SEARCH_TRACE_PROFILE_RETENTION` | `720h` | Profile 健康事件的保留时长 |
+| `SEARCH_TRACE_LOG_RETENTION` | `168h` | 按天滚动 JSON trace 日志的保留时长 |
+| `SEARCH_TRACE_SQLITE_MAX_BYTES` | `1073741824` | Trace SQLite 文件大小上限，超出按最旧 trace 优先清理 |
 | `SEARCH_FRESH_TTL` | `15m` | fresh cache TTL |
 | `SEARCH_STALE_TTL` | `24h` | stale 最大年龄 |
 | `SEARCH_PROVIDER_RATE` | `1` | Provider token/s |
@@ -473,7 +564,9 @@ make check
 
 ## Header Profile Pool 设计与 Bing 诊断
 
-Profile 的选择键优先使用 `request_id`，缺失时使用 query 的稳定 hash；因此同一逻辑请求会复用同一 profile。Pool 已接入 Baidu HTTP、DuckDuckGo HTTP、Baidu/Bing/Brave Chromedp 和正文 browser reader。授权 Debug 响应的 `attempts[*].header_profile` 可用于按 profile 聚合成功率。
+注意区分两个不同层次的 "Profile"：本节的 Header Profile Pool（`internal/headerprofile`）管理 UA/Accept-Language/Client Hints/viewport 的一致性组合，供单次 HTTP/Chromedp 请求选用；前文「容量感知路由与 Profile 池」里的 Agent Profile（`internal/profilepool`）是更高层的调度单位，绑定并发容量和跨请求的信任状态机，一个 Agent Profile 内部的多次请求会各自选用 Header Profile。
+
+Header Profile 的选择键优先使用 `request_id`，缺失时使用 query 的稳定 hash；因此同一逻辑请求会复用同一 header profile。Pool 已接入 Baidu HTTP、DuckDuckGo HTTP、Baidu/Bing/Brave Chromedp 和正文 browser reader。授权 Debug 响应的 `attempts[*].header_profile` 可用于按 header profile 聚合成功率，`attempts[*].profile_id` 则对应 Agent Profile。
 
 Chromedp 在导航前通过 CDP 同时设置 User-Agent、语言、平台、UA Client Hints、额外请求头和 viewport。不要从互联网上收集大量陈旧 UA 随机轮换；少量、可验证且和实际 Chromium 版本一致的 profile 更容易诊断，也不会制造互相矛盾的浏览器信号。
 
