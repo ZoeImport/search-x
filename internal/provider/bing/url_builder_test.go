@@ -39,7 +39,7 @@ func TestBuildSearchURLWithKnownRegion(t *testing.T) {
 	}
 }
 
-func TestBuildSearchURLWithUnknownRegionFallsBackToEnglish(t *testing.T) {
+func TestBuildSearchURLWithUnknownRegionOmitsMkt(t *testing.T) {
 	result, err := BuildSearchURL("https://www.bing.com/search", domain.SearchRequest{
 		Query: "weather", Limit: 10, Page: 1, Region: "br",
 	})
@@ -50,7 +50,7 @@ func TestBuildSearchURLWithUnknownRegionFallsBackToEnglish(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := parsed.Query().Get("mkt"); got != "en-BR" {
-		t.Fatalf("mkt=%s", got)
+	if _, ok := parsed.Query()["mkt"]; ok {
+		t.Fatalf("expected no mkt param for unmapped region, url=%s", result)
 	}
 }

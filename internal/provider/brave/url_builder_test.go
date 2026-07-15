@@ -18,3 +18,21 @@ func TestBuildSearchURL(t *testing.T) {
 		t.Fatalf("url=%s", result)
 	}
 }
+
+func TestBuildSearchURLIgnoresRegion(t *testing.T) {
+	withRegion, err := BuildSearchURL("https://search.brave.com/search", domain.SearchRequest{
+		Query: "golang", Limit: 10, Page: 1, Region: "jp",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutRegion, err := BuildSearchURL("https://search.brave.com/search", domain.SearchRequest{
+		Query: "golang", Limit: 10, Page: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withRegion != withoutRegion {
+		t.Fatalf("region changed URL: with=%s without=%s", withRegion, withoutRegion)
+	}
+}
