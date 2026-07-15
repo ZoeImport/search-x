@@ -53,6 +53,27 @@ func TestProviderFetchesQueryAndPagination(t *testing.T) {
 	}
 }
 
+func TestProviderIgnoresRegion(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if _, present := request.URL.Query()["kl"]; present {
+			t.Errorf("expected no kl param, query=%s", request.URL.RawQuery)
+		}
+		response.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = response.Write(fixture(t, "normal.html"))
+	}))
+	defer server.Close()
+
+	provider, err := New(Config{BaseURL: server.URL, Timeout: time.Second, MaxBodyBytes: 1 << 20}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.Search(context.Background(), domain.SearchRequest{
+		Query: "go language", Provider: domain.ProviderNameDuckDuckGo, Limit: 10, Page: 1, Region: "jp",
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProviderClassifiesHTTPFailures(t *testing.T) {
 	tests := []struct {
 		name      string

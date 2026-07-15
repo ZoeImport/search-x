@@ -259,9 +259,14 @@ func normalizeRequest(request domain.SearchRequest) (domain.SearchRequest, error
 		original := fmt.Errorf("invalid pagination: limit=%d page=%d", request.Limit, request.Page)
 		return domain.SearchRequest{}, &domain.SearchError{Code: domain.ErrInvalidRequest, Message: "分页参数超出范围", Retryable: false, Original: original}
 	}
+	region, err := domain.NormalizeRegion(request.Region)
+	if err != nil {
+		return domain.SearchRequest{}, &domain.SearchError{Code: domain.ErrInvalidRequest, Message: "地区参数格式错误", Retryable: false, Original: err}
+	}
+	request.Region = region
 	return request, nil
 }
 
 func cacheKey(request domain.SearchRequest) string {
-	return fmt.Sprintf("%s|%s|%d|%d", request.Provider, request.Query, request.Page, request.Limit)
+	return fmt.Sprintf("%s|%s|%d|%d|%s", request.Provider, request.Query, request.Page, request.Limit, request.Region)
 }

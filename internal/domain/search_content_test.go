@@ -44,6 +44,7 @@ func TestSearchContentRequestNormalizeRejectsInvalidValues(t *testing.T) {
 		{name: "limit too large", request: SearchContentRequest{Query: "go", Limit: 11}},
 		{name: "invalid format", request: SearchContentRequest{Query: "go", Content: ContentOptions{Enabled: true, Format: OutputFormat("html")}}},
 		{name: "max chars too small", request: SearchContentRequest{Query: "go", Content: ContentOptions{Enabled: true, MaxChars: MinReadMaxChars - 1}}},
+		{name: "invalid region", request: SearchContentRequest{Query: "go", Region: "usa"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -51,5 +52,15 @@ func TestSearchContentRequestNormalizeRejectsInvalidValues(t *testing.T) {
 				t.Fatal("expected validation error")
 			}
 		})
+	}
+}
+
+func TestSearchContentRequestNormalizeLowercasesRegion(t *testing.T) {
+	request, err := (SearchContentRequest{Query: "go", Region: "  JP  "}).Normalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Region != "jp" {
+		t.Fatalf("region = %q", request.Region)
 	}
 }

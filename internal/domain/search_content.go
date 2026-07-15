@@ -57,6 +57,9 @@ type SearchContentRequest struct {
 	Refresh bool `json:"refresh"`
 	// Debug enables authorized diagnostics and forces refresh.
 	Debug bool `json:"debug"`
+	// Region is an optional ISO 3166-1 alpha-2 country code. Only the Bing
+	// Provider honors it; other Providers ignore it silently.
+	Region string `json:"region"`
 	// RequestID correlates logs and responses.
 	RequestID string `json:"-"`
 }
@@ -92,6 +95,11 @@ func (request SearchContentRequest) Normalize() (SearchContentRequest, error) {
 	if request.Content.MaxChars < MinReadMaxChars || request.Content.MaxChars > MaxReadMaxChars {
 		return SearchContentRequest{}, fmt.Errorf("max_chars must be between %d and %d", MinReadMaxChars, MaxReadMaxChars)
 	}
+	region, err := NormalizeRegion(request.Region)
+	if err != nil {
+		return SearchContentRequest{}, err
+	}
+	request.Region = region
 	if request.Debug {
 		request.Refresh = true
 	}

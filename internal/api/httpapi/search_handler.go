@@ -19,6 +19,9 @@ type searchQuery struct {
 	Page     int    `form:"page" binding:"omitempty,min=1,max=10"`
 	Refresh  bool   `form:"refresh"`
 	Debug    *bool  `form:"debug"`
+	// Region is an optional ISO 3166-1 alpha-2 country code. Only the Bing
+	// Provider honors it; other Providers ignore it silently.
+	Region string `form:"region"`
 }
 
 type errorBody struct {
@@ -76,7 +79,7 @@ func (h *handler) search(c *gin.Context) {
 	defer cancel()
 	request := domain.SearchRequest{
 		Query: query.Q, Provider: domain.ProviderName(query.Provider), RequestID: requestID(c), Limit: query.Limit, Page: query.Page,
-		Refresh: query.Refresh, Debug: effectiveDebug,
+		Refresh: query.Refresh, Debug: effectiveDebug, Region: query.Region,
 	}
 	response, err := h.searcher.Search(ctx, request)
 	if err != nil {

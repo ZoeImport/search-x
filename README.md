@@ -203,6 +203,7 @@ docker-compose down --volumes
 |---|---:|---:|---|
 | `q` | 是 | - | 1–256 个字符 |
 | `provider` | 否 | `auto` | 支持 `auto`、`baidu`、`duckduckgo`、`bing`、`brave`；显式 Provider 不跨源 fallback |
+| `region` | 否 | 不指定 | ISO 3166-1 alpha-2 两位国家码（如 `cn`/`us`/`jp`），大小写不敏感；**仅 `bing` 生效**（映射为 Bing 的 `mkt` 市场参数，目前支持 `cn`/`us`/`jp`/`hk`/`tw`/`gb`/`de`/`fr`/`kr`，均已实测确认会改变返回结果内容），其余 Provider 以及未列出的地区码静默忽略（不报错，等同不指定）；`provider=auto` 时该参数不影响路由，只在最终选中 Bing 时生效 |
 | `limit` | 否 | `10` | 1–20 |
 | `page` | 否 | `1` | 1–10 |
 | `refresh` | 否 | `false` | `true` 跳过 fresh cache，强制实时查询 |
@@ -261,6 +262,7 @@ curl 'http://127.0.0.1:8080/v1/search' \
   --data '{
     "query": "Go 语言并发模型",
     "provider": "auto",
+    "region": "cn",
     "limit": 5,
     "content": {
       "enabled": true,
@@ -272,6 +274,8 @@ curl 'http://127.0.0.1:8080/v1/search' \
     "debug": false
   }'
 ```
+
+`region` 是可选的 ISO 3166-1 alpha-2 两位国家码，语义和 `GET /v1/search` 的同名参数一致：仅 `bing` 生效且仅支持已实测确认的地区码，其余 Provider、以及未列出的地区码（包括 `auto` 路由到的非 Bing 结果）静默忽略。
 
 `candidate_limit=0` 自动使用：
 

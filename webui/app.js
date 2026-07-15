@@ -4,7 +4,7 @@ const DEBUG_TOKEN_KEY = "searchroom.debugToken";
 const BASE_URL_KEY = "searchroom.baseUrl";
 
 const elements = Object.fromEntries([
-  "searchForm", "queryInput", "baseUrlInput", "providerInput", "limitInput", "pageInput",
+  "searchForm", "queryInput", "baseUrlInput", "providerInput", "regionInput", "limitInput", "pageInput",
   "refreshInput", "debugInput", "contentEnabledInput", "candidateLimitInput", "tokenRow", "tokenInput", "searchButton", "healthStatus",
   "searchStatus", "searchMeta", "searchNotices", "resultsList", "resultCount", "pagination",
   "previousPage", "nextPage", "pageLabel", "searchDiagnostics", "attemptCount", "diagnosticsBody",
@@ -511,6 +511,7 @@ async function runSearch() {
   sessionStorage.setItem(DEBUG_TOKEN_KEY, elements.tokenInput.value);
 
   const combined = elements.contentEnabledInput.checked;
+  const region = elements.regionInput.value.trim();
   const params = new URLSearchParams({
     q: query,
     provider: elements.providerInput.value,
@@ -519,6 +520,9 @@ async function runSearch() {
     refresh: String(elements.refreshInput.checked),
     debug: String(elements.debugInput.checked)
   });
+  if (region) {
+    params.set("region", region);
+  }
 
   showSearchStatus("loading", combined ? "正在搜索并提取正文" : "正在查询搜索源", combined ? "系统会超额搜索候选并优先保留可读正文。" : "Provider chain、缓存与解析状态会在响应后呈现。");
   clear(elements.resultsList);
@@ -538,6 +542,7 @@ async function runSearch() {
       body: JSON.stringify({
         query,
         provider: elements.providerInput.value,
+        region: region || undefined,
         limit: Number(elements.limitInput.value) || 5,
         content: {
           enabled: true,

@@ -54,7 +54,7 @@ func (service *SearchContentService) Search(ctx context.Context, request domain.
 	searchStarted := service.now()
 	searchResponse, selection, err := service.selector.Select(ctx, domain.SearchRequest{
 		Query: normalized.Query, Provider: normalized.Provider, RequestID: normalized.RequestID,
-		Limit: candidateLimit, Page: 1, Refresh: normalized.Refresh, Debug: normalized.Debug,
+		Limit: candidateLimit, Page: 1, Refresh: normalized.Refresh, Debug: normalized.Debug, Region: normalized.Region,
 	})
 	if err != nil {
 		return domain.SearchContentResponse{}, err

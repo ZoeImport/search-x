@@ -1,6 +1,26 @@
 package domain
 
-import "time"
+import (
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
+)
+
+var regionPattern = regexp.MustCompile(`^[a-z]{2}$`)
+
+// NormalizeRegion lower-cases and validates an optional ISO 3166-1 alpha-2
+// region code. An empty region is valid and means "unspecified".
+func NormalizeRegion(region string) (string, error) {
+	region = strings.ToLower(strings.TrimSpace(region))
+	if region == "" {
+		return "", nil
+	}
+	if !regionPattern.MatchString(region) {
+		return "", fmt.Errorf("region must be a 2-letter country code, got %q", region)
+	}
+	return region, nil
+}
 
 // ProviderName identifies a registered search source or strategy.
 type ProviderName string
@@ -121,6 +141,10 @@ type SearchRequest struct {
 	Page      int
 	Refresh   bool
 	Debug     bool
+	// Region is an optional ISO 3166-1 alpha-2 country code. Only the Bing
+	// Provider honors it (as the "mkt" market parameter); other Providers
+	// ignore it silently.
+	Region string
 }
 
 type SearchResult struct {
