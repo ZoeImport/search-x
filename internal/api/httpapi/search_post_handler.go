@@ -65,7 +65,7 @@ func (handler *handler) searchPost(c *gin.Context) {
 	if !normalized.Content.Enabled {
 		response, searchErr := handler.searcher.Search(ctx, domain.SearchRequest{
 			Query: normalized.Query, Provider: normalized.Provider, RequestID: normalized.RequestID,
-			Limit: normalized.Limit, Page: 1, Refresh: normalized.Refresh, Debug: normalized.Debug,
+			Limit: normalized.Limit, Page: 1, Refresh: normalized.Refresh, Debug: normalized.Debug, Region: normalized.Region,
 		})
 		if searchErr != nil {
 			writeSearchPostError(c, searchErr, effectiveDebug, normalized.Provider)

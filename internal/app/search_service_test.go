@@ -351,11 +351,27 @@ func TestSearchServiceValidatesAndFindsProvider(t *testing.T) {
 	for _, request := range []domain.SearchRequest{
 		{Query: "", Provider: "baidu", Limit: 10, Page: 1},
 		{Query: "q", Provider: "missing", Limit: 10, Page: 1},
+		{Query: "q", Provider: "baidu", Limit: 10, Page: 1, Region: "usa"},
 	} {
 		_, err := service.Search(context.Background(), request)
 		var searchErr *domain.SearchError
 		if !errors.As(err, &searchErr) {
 			t.Fatalf("request=%#v error=%v", request, err)
 		}
+	}
+}
+
+func TestSearchServiceCachesRegionsIndependently(t *testing.T) {
+	p := &countingProvider{result: domain.SearchResponse{Provider: "baidu", Results: []domain.SearchResult{{Title: "Go"}}}}
+	service, _ := newServiceForTest(t, p, time.Now)
+
+	if _, err := service.Search(context.Background(), domain.SearchRequest{Query: "golang", Provider: "baidu", Limit: 10, Page: 1, Region: "jp"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Search(context.Background(), domain.SearchRequest{Query: "golang", Provider: "baidu", Limit: 10, Page: 1, Region: "cn"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.calls.Load(); got != 2 {
+		t.Fatalf("expected one live call per region, provider calls=%d", got)
 	}
 }
