@@ -47,9 +47,13 @@ func TestPOSTSearchContractAndProviderVisibility(t *testing.T) {
 	if _, ok := results[0].(map[string]any)["provider"]; ok {
 		t.Fatal("provider must be hidden")
 	}
-	if _, ok := body["meta"].(map[string]any)["provider"]; ok { t.Fatal("meta provider must be hidden") }
+	if _, ok := body["meta"].(map[string]any)["provider"]; ok {
+		t.Fatal("meta provider must be hidden")
+	}
 	warnings := body["warnings"].([]any)
-	if strings.Contains(strings.ToLower(warnings[0].(map[string]any)["message"].(string)), "bing") { t.Fatalf("warning leaked provider: %v", warnings) }
+	if strings.Contains(strings.ToLower(warnings[0].(map[string]any)["message"].(string)), "bing") {
+		t.Fatalf("warning leaked provider: %v", warnings)
+	}
 	if len(searcher.request.Providers) != 1 || searcher.request.Providers[0] != domain.ProviderNameBing {
 		t.Fatalf("providers=%v", searcher.request.Providers)
 	}
@@ -94,6 +98,99 @@ func TestCursorBindsOrderedProviderChainAndPinsProvider(t *testing.T) {
 	router.ServeHTTP(pinned, httptest.NewRequest(http.MethodPost, "/v1/websearch", strings.NewReader(`{"query":"go","limit":1,"cursor":"`+token+`"}`)))
 	if pinned.Code != http.StatusOK || searcher.request.Provider != domain.ProviderNameBing {
 		t.Fatalf("pinned=%d request=%+v body=%s", pinned.Code, searcher.request, pinned.Body.String())
+	}
+}
+
+func TestPOSTSearchAcceptsAdvancedSearchAndReturnsCanonicalMetadata(t *testing.T) {
+	searcher := &fakeSearcher{}
+	codec, _ := cursor.New("secret", time.Minute, time.Now)
+	router, _ := New(Options{
+		Searcher: searcher, Cursor: codec, Ready: func() bool { return true },
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), AllowRequestProviders: true,
+		EnabledProviders: []string{"baidu", "brave", "duckduckgo"}, ProviderVisibility: "public",
+	})
+	body := `{
+		"query":"context",
+		"limit":1,
+		"routing":{"providers":["baidu","brave","duckduckgo"]},
+		"filters":{"region":"US","include_domains":["GO.DEV"],"exclude_domains":["example.com"]},
+		"query_options":{"exact_phrases":["structured concurrency"],"title_terms":["guide"],"file_types":["pdf"]}
+	}`
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/websearch", strings.NewReader(body)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if len(searcher.request.Providers) != 2 || searcher.request.Providers[0] != domain.ProviderNameBrave || searcher.request.Providers[1] != domain.ProviderNameDuckDuckGo {
+		t.Fatalf("providers=%v", searcher.request.Providers)
+	}
+	if searcher.request.Region != "us" || len(searcher.request.Filters.IncludeDomains) != 1 || searcher.request.Filters.IncludeDomains[0] != "go.dev" {
+		t.Fatalf("request=%+v", searcher.request)
+	}
+}
+
+func TestCursorBindsRegionFiltersAndQueryOptions(t *testing.T) {
+	searcher := &fakeSearcher{}
+	codec, _ := cursor.New("secret", time.Minute, time.Now)
+	router, _ := New(Options{
+		Searcher: searcher, Cursor: codec, Ready: func() bool { return true },
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), AllowRequestProviders: true,
+		EnabledProviders: []string{"brave"},
+	})
+	first := httptest.NewRecorder()
+	router.ServeHTTP(first, httptest.NewRequest(http.MethodPost, "/v1/websearch", strings.NewReader(
+		`{"query":"go","limit":1,"routing":{"providers":["brave"]},"filters":{"region":"US","include_domains":["go.dev"]},"query_options":{"title_terms":["guide"]}}`,
+	)))
+	if first.Code != http.StatusOK {
+		t.Fatalf("first=%d %s", first.Code, first.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(first.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	token := body["page"].(map[string]any)["next_cursor"].(string)
+	for _, nextBody := range []string{
+		`{"query":"go","limit":1,"cursor":"` + token + `","filters":{"region":"JP","include_domains":["go.dev"]},"query_options":{"title_terms":["guide"]}}`,
+		`{"query":"go","limit":1,"cursor":"` + token + `","filters":{"region":"US","include_domains":["example.com"]},"query_options":{"title_terms":["guide"]}}`,
+		`{"query":"go","limit":1,"cursor":"` + token + `","filters":{"region":"US","include_domains":["go.dev"]},"query_options":{"title_terms":["tutorial"]}}`,
+	} {
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/websearch", strings.NewReader(nextBody)))
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("body=%s status=%d response=%s", nextBody, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestCursorRestoresOriginalProviderSubsetWhenRoutingIsOmitted(t *testing.T) {
+	searcher := &fakeSearcher{}
+	codec, _ := cursor.New("secret", time.Minute, time.Now)
+	router, _ := New(Options{
+		Searcher: searcher, Cursor: codec, Ready: func() bool { return true },
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), AllowRequestProviders: true,
+		EnabledProviders: []string{"baidu", "bing"}, ProviderVisibility: "public",
+	})
+	first := httptest.NewRecorder()
+	router.ServeHTTP(first, httptest.NewRequest(http.MethodPost, "/v1/websearch", strings.NewReader(
+		`{"query":"go","limit":1,"routing":{"providers":["bing"]}}`,
+	)))
+	if first.Code != http.StatusOK {
+		t.Fatalf("first=%d %s", first.Code, first.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(first.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	token := body["page"].(map[string]any)["next_cursor"].(string)
+	next := httptest.NewRecorder()
+	router.ServeHTTP(next, httptest.NewRequest(http.MethodPost, "/v1/websearch", strings.NewReader(
+		`{"query":"go","limit":1,"cursor":"`+token+`"}`,
+	)))
+	if next.Code != http.StatusOK {
+		t.Fatalf("next=%d %s", next.Code, next.Body.String())
+	}
+	if len(searcher.request.Providers) != 1 || searcher.request.Providers[0] != domain.ProviderNameBing {
+		t.Fatalf("providers=%v", searcher.request.Providers)
 	}
 }
 

@@ -31,7 +31,7 @@ func BuildSearchURL(baseURL string, request domain.SearchRequest) (string, error
 		return "", fmt.Errorf("invalid Bing browser base URL %q", baseURL)
 	}
 	values := parsed.Query()
-	values.Set("q", request.Query)
+	values.Set("q", request.UpstreamQuery())
 	values.Set("count", strconv.Itoa(request.Limit))
 	values.Set("first", strconv.Itoa((request.Page-1)*request.Limit+1))
 	if mkt, ok := regionMarketCodes[request.Region]; ok {

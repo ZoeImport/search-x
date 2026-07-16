@@ -5,7 +5,9 @@ const WEBFETCH_BASE_URL_KEY = "searchroom.readBaseUrl";
 const API_KEY_SESSION_KEY = "searchroom.apiKey";
 
 const elements = Object.fromEntries([
-  "searchForm", "queryInput", "apiKeyInput", "baseUrlInput", "providerInput", "regionInput", "limitInput", "searchButton", "healthStatus",
+  "searchForm", "queryInput", "apiKeyInput", "baseUrlInput", "providerInput", "regionInput", "limitInput",
+  "includeDomainsInput", "excludeDomainsInput", "exactPhrasesInput", "anyTermsInput", "excludeTermsInput", "titleTermsInput", "fileTypesInput",
+  "searchButton", "healthStatus",
   "searchStatus", "searchMeta", "searchNotices", "resultsList", "resultCount", "pagination",
   "previousPage", "nextPage", "pageLabel", "searchDiagnostics", "attemptCount", "diagnosticsBody",
   "searchJSONPanel", "searchJSONTree", "copySearchJSON",
@@ -58,6 +60,10 @@ function prettyJSON(value) {
   } catch {
     return String(value);
   }
+}
+
+function commaValues(element) {
+  return element.value.split(",").map((value) => value.trim()).filter(Boolean);
 }
 
 async function copyText(button, value) {
@@ -540,7 +546,20 @@ async function runSearch() {
           : [elements.providerInput.value]
       }
     };
-    if (region) body.filters = { region };
+    const filters = {
+      include_domains: commaValues(elements.includeDomainsInput),
+      exclude_domains: commaValues(elements.excludeDomainsInput)
+    };
+    if (region) filters.region = region;
+    if (filters.region || filters.include_domains.length || filters.exclude_domains.length) body.filters = filters;
+    const queryOptions = {
+      exact_phrases: commaValues(elements.exactPhrasesInput),
+      any_terms: commaValues(elements.anyTermsInput),
+      exclude_terms: commaValues(elements.excludeTermsInput),
+      title_terms: commaValues(elements.titleTermsInput),
+      file_types: commaValues(elements.fileTypesInput)
+    };
+    if (Object.values(queryOptions).some((values) => values.length)) body.query_options = queryOptions;
     const cursor = state.cursorHistory[state.cursorIndex];
     if (cursor) body.cursor = cursor;
     const { payload } = await requestJSON(`${baseURL}/search`, {

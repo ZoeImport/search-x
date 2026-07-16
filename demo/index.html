@@ -73,6 +73,34 @@
             <span>Limit</span>
             <input id="limitInput" type="number" min="1" max="20" value="10">
           </label>
+          <label class="field">
+            <span>Include domains</span>
+            <input id="includeDomainsInput" type="text" spellcheck="false" placeholder="go.dev, pkg.go.dev">
+          </label>
+          <label class="field">
+            <span>Exclude domains</span>
+            <input id="excludeDomainsInput" type="text" spellcheck="false" placeholder="example.com">
+          </label>
+          <label class="field">
+            <span>Exact phrases</span>
+            <input id="exactPhrasesInput" type="text" placeholder="context package, structured concurrency">
+          </label>
+          <label class="field">
+            <span>Any terms</span>
+            <input id="anyTermsInput" type="text" placeholder="golang, go language">
+          </label>
+          <label class="field">
+            <span>Exclude terms</span>
+            <input id="excludeTermsInput" type="text" placeholder="python, javascript">
+          </label>
+          <label class="field">
+            <span>Title terms</span>
+            <input id="titleTermsInput" type="text" placeholder="guide, documentation">
+          </label>
+          <label class="field compact-field">
+            <span>File types</span>
+            <input id="fileTypesInput" type="text" spellcheck="false" placeholder="pdf, html">
+          </label>
         </div>
       </form>
     </section>

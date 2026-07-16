@@ -180,7 +180,7 @@ func (p *Provider) buildURL(request domain.SearchRequest) (string, error) {
 		return "", fmt.Errorf("parse DuckDuckGo base URL: %w", err)
 	}
 	values := parsed.Query()
-	values.Set("q", request.Query)
+	values.Set("q", request.UpstreamQuery())
 	values.Set("s", strconv.Itoa((request.Page-1)*request.Limit))
 	parsed.RawQuery = values.Encode()
 	return parsed.String(), nil

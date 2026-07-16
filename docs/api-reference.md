@@ -18,8 +18,17 @@ API Market 队列分别为 `se/general/search`、`se/general/fetch`，vhost 为 
     "query": "golang context package",
     "limit": 5,
     "timeout": "20s",
-    "routing": {"providers": ["baidu", "bing"]},
-    "filters": {"region": "CN"}
+    "routing": {"providers": ["brave", "duckduckgo"]},
+    "filters": {
+      "region": "CN",
+      "include_domains": ["go.dev"],
+      "exclude_domains": ["example.com"]
+    },
+    "query_options": {
+      "exact_phrases": ["context package"],
+      "title_terms": ["documentation"],
+      "file_types": ["html"]
+    }
   }
 }
 ```
@@ -31,9 +40,18 @@ API Market 队列分别为 `se/general/search`、`se/general/fetch`，vhost 为 
 | `timeout` | string | 可选，仅整数 `ms`/`s`；100ms–配置上限，上限最多 60s；覆盖 YAML 默认值 |
 | `routing.providers` | string[] | 可选，有序、无重复的已启用 Provider 子集；默认 `baidu,bing,brave,duckduckgo` |
 | `filters.region` | string | 可选，ISO 3166-1 alpha-2 提示 |
+| `filters.include_domains` | string[] | 可选，最多 20 个；匹配域名及其子域名，响应 URL 会再次强校验 |
+| `filters.exclude_domains` | string[] | 可选，最多 20 个；排除域名及其子域名，不能与 include 重复 |
+| `query_options.exact_phrases` | string[] | 可选，最多 20 个精确短语 |
+| `query_options.any_terms` | string[] | 可选，任意一个词命中 |
+| `query_options.exclude_terms` | string[] | 可选，排除关键词 |
+| `query_options.title_terms` | string[] | 可选，标题关键词 |
+| `query_options.file_types` | string[] | 可选，最多 10 个文件扩展名 |
 | `cursor` | string | 可选，上一页返回的 opaque cursor，最长 4096 |
 
-第一页按 `routing.providers` 严格顺序失败降级，空结果也进入下一 Provider。cursor 同时绑定 query、limit 和完整有序链，并固定第一页实际成功的 Provider；分页不跨 Provider 降级。Provider visibility 为 `hidden` 时，结果、meta 与 warning 均不会泄漏 Provider 名。
+域名过滤由四个 Provider 接受，并由后端按最终 URL 强制执行。结构化 `query_options` 使用 strict 能力策略；当前 Brave 和 DuckDuckGo 有官方明确的操作符支持，Baidu/Bing 会在执行前从候选链中移除。如果没有兼容 Provider，返回 `unsupported_search_options`。
+
+第一页按兼容 Provider 链严格顺序失败降级，后置过滤为空也进入下一 Provider。`cur_v2` cursor 绑定 query、region、filters、query options、limit 和完整兼容链，并固定第一页实际成功的 Provider；分页不跨 Provider 降级。Provider visibility 为 `hidden` 时，结果、meta 与 warning 均不会泄漏 Provider 名。
 
 业务成功响应固定包含 `usage: {"units": 1}`。`results[].id` 是“返回 URL 原字符串”的 hash：相同 URL 字符串得到相同 ID，但它不是 canonical page identity。下方展示的是 API Market 外层响应：
 
@@ -44,9 +62,9 @@ API Market 队列分别为 `se/general/search`、`se/general/fetch`，vhost 为 
   "response": {
     "request_id": "req_xxx",
     "query": "golang context package",
-    "results": [{"id":"res_xxx","url":"https://go.dev/","title":"Go","snippet":"...","rank":1,"provider":"bing"}],
-    "page": {"next_cursor":"cur_v1_xxx","has_more":true},
-    "meta": {"cached":false,"took_ms":120,"provider":"bing"},
+    "results": [{"id":"res_xxx","url":"https://go.dev/?utm_source=search","canonical_url":"https://go.dev/","domain":"go.dev","title":"Go","snippet":"...","rank":1,"provider":"brave"}],
+    "page": {"next_cursor":"cur_v2_xxx","has_more":true},
+    "meta": {"cached":false,"took_ms":120,"provider":"brave"},
     "warnings": [],
     "usage": {"units":1}
   }

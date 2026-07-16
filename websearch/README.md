@@ -11,7 +11,7 @@ Content-Type: application/json
 ```
 
 ```json
-{"request":{"query":"golang","limit":10,"timeout":"20s","routing":{"providers":["baidu","bing"]},"filters":{"region":"CN"}}}
+{"request":{"query":"golang","limit":10,"timeout":"20s","routing":{"providers":["brave","duckduckgo"]},"filters":{"region":"CN","include_domains":["go.dev"],"exclude_domains":["example.com"]},"query_options":{"exact_phrases":["context package"],"title_terms":["documentation"],"file_types":["html"]}}}
 ```
 
 业务响应位于 API Market 返回的 `response` 字段。完整契约见 [OpenAPI](openapi/openapi.yaml)。公开接口只支持单个 query；`limit` 默认 10，范围 1–20。下一页使用 `response.page.next_cursor`，客户端不解析 cursor。
@@ -34,7 +34,11 @@ WEBSEARCH_ALLOW_REQUEST_PROVIDERS=true
 WEBSEARCH_RESPONSE_PROVIDER_VISIBILITY=public
 ```
 
-`routing.providers` 是有序、无重复的已启用 Provider 子集。服务严格按请求顺序降级；若请求未传则使用 YAML 中 `enabled_providers` 的默认顺序。第一页成功后 cursor 会同时绑定完整链并固定实际 Provider，后续页不跨 Provider 降级。`id` 仅对完全相同的返回 URL 字符串稳定，不表示规范化网页身份。
+`routing.providers` 是有序、无重复的已启用 Provider 子集。服务严格按请求顺序降级；若请求未传则使用 YAML 中 `enabled_providers` 的默认顺序。`filters.include_domains` / `exclude_domains` 对返回 URL 做强制后置校验，并匹配目标域名及其子域名。`query_options` 使用严格能力策略：当前只有 Brave、DuckDuckGo 有官方明确的高级操作符契约，不兼容 Provider 会在执行前从候选链移除；若没有兼容项则返回参数错误。
+
+搜索结果新增 `canonical_url` 和 `domain`。服务会移除 fragment、默认端口和常见跟踪参数，并按 canonical URL 去重。`url` 仍保留 Provider 返回的原始导航地址；`id` 仍基于该原始 URL 字符串生成。
+
+第一页成功后，`cur_v2` cursor 会绑定规范化 query、region、filters、query options、limit 和兼容 Provider 顺序，并固定实际 Provider；后续页不跨 Provider 降级。
 
 ## 主要配置
 

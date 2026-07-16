@@ -15,7 +15,7 @@ func BuildSearchURL(baseURL string, request domain.SearchRequest) (string, error
 		return "", fmt.Errorf("invalid Brave base URL %q", baseURL)
 	}
 	query := parsed.Query()
-	query.Set("q", request.Query)
+	query.Set("q", request.UpstreamQuery())
 	query.Set("source", "web")
 	if request.Page > 1 {
 		query.Set("offset", fmt.Sprintf("%d", request.Page-1))
