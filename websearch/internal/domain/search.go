@@ -148,14 +148,44 @@ type SearchRequest struct {
 	// Region is an optional ISO 3166-1 alpha-2 country code. Only the Bing
 	// Provider honors it (as the "mkt" market parameter); other Providers
 	// ignore it silently.
-	Region string
+	Region       string
+	Filters      SearchFilters
+	QueryOptions SearchQueryOptions
+	// ProviderQuery is an internal provider-specific compilation of Query and
+	// advanced options. It is never accepted from or returned to API clients.
+	ProviderQuery string
+	// ProviderPageToken is an encrypted-cursor-carried continuation token.
+	// Only the pinned Provider interprets its contents.
+	ProviderPageToken string
+}
+
+func (request SearchRequest) UpstreamQuery() string {
+	if request.ProviderQuery != "" {
+		return request.ProviderQuery
+	}
+	return request.Query
+}
+
+type SearchFilters struct {
+	IncludeDomains []string
+	ExcludeDomains []string
+}
+
+type SearchQueryOptions struct {
+	ExactPhrases []string
+	AnyTerms     []string
+	ExcludeTerms []string
+	TitleTerms   []string
+	FileTypes    []string
 }
 
 type SearchResult struct {
-	Title   string `json:"title"`
-	URL     string `json:"url"`
-	Snippet string `json:"snippet"`
-	Rank    int    `json:"rank"`
+	Title        string `json:"title"`
+	URL          string `json:"url"`
+	CanonicalURL string `json:"canonical_url,omitempty"`
+	Domain       string `json:"domain,omitempty"`
+	Snippet      string `json:"snippet"`
+	Rank         int    `json:"rank"`
 	// Provider identifies the search source that produced this result.
 	Provider ProviderName `json:"provider"`
 }
@@ -216,11 +246,13 @@ type Debug struct {
 }
 
 type SearchResponse struct {
-	Query    string         `json:"query"`
-	Provider ProviderName   `json:"provider"`
-	Results  []SearchResult `json:"results"`
-	Meta     Meta           `json:"meta"`
-	Warnings []Warning      `json:"warnings"`
-	Debug    *Debug         `json:"debug,omitempty"`
-	StoredAt time.Time      `json:"-"`
+	Query           string         `json:"query"`
+	Provider        ProviderName   `json:"provider"`
+	Results         []SearchResult `json:"results"`
+	Meta            Meta           `json:"meta"`
+	Warnings        []Warning      `json:"warnings"`
+	Debug           *Debug         `json:"debug,omitempty"`
+	StoredAt        time.Time      `json:"-"`
+	PaginationKnown bool           `json:"-"`
+	NextPageToken   string         `json:"-"`
 }

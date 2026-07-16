@@ -58,7 +58,7 @@ components:
       properties:
         query: {type: string, minLength: 1, maxLength: 256}
         limit: {type: integer, minimum: 1, maximum: 20, default: 10}
-        cursor: {type: string, maxLength: 4096, description: Opaque token returned by page.next_cursor. It pins pagination to the selected provider and original ordered chain.}
+        cursor: {type: string, maxLength: 4096, description: Opaque token returned by page.next_cursor. It binds the normalized query, filters, query options, limit and ordered compatible provider chain, pins pagination to the selected provider, and may carry encrypted provider continuation state.}
         timeout: {type: string, pattern: '^[1-9][0-9]*(ms|s)$', default: 20s, examples: [1500ms, 20s], description: Total request budget from 100ms through the configured maximum (at most 60s).}
         routing:
           type: object
@@ -75,12 +75,45 @@ components:
           additionalProperties: false
           properties:
             region: {type: string, pattern: '^[A-Za-z]{2}$', description: ISO 3166-1 alpha-2 region hint.}
+            include_domains:
+              type: array
+              maxItems: 20
+              uniqueItems: true
+              items: {type: string, minLength: 3, maxLength: 253, pattern: '^[A-Za-z0-9.-]+$'}
+              description: Result domains to include. A domain also matches its subdomains; returned URLs are post-filtered.
+            exclude_domains:
+              type: array
+              maxItems: 20
+              uniqueItems: true
+              items: {type: string, minLength: 3, maxLength: 253, pattern: '^[A-Za-z0-9.-]+$'}
+              description: Result domains to exclude. A domain also excludes its subdomains; returned URLs are post-filtered.
+        query_options:
+          type: object
+          additionalProperties: false
+          description: Strict structured search operators. Providers without full support are removed from the execution chain; currently Brave and DuckDuckGo support these fields.
+          properties:
+            exact_phrases: {$ref: '#/components/schemas/SearchTerms'}
+            any_terms: {$ref: '#/components/schemas/SearchTerms'}
+            exclude_terms: {$ref: '#/components/schemas/SearchTerms'}
+            title_terms: {$ref: '#/components/schemas/SearchTerms'}
+            file_types:
+              type: array
+              maxItems: 10
+              uniqueItems: true
+              items: {type: string, pattern: '^\.?[A-Za-z0-9]{1,10}$'}
+    SearchTerms:
+      type: array
+      maxItems: 20
+      uniqueItems: true
+      items: {type: string, minLength: 1, maxLength: 100}
     SearchResult:
       type: object
-      required: [id, url, title, snippet, rank]
+      required: [id, url, canonical_url, domain, title, snippet, rank]
       properties:
         id: {type: string, description: Stable only for the exact returned URL string; it is not a canonical page identity.}
         url: {type: string, format: uri}
+        canonical_url: {type: string, format: uri, description: Normalized URL identity used for result deduplication.}
+        domain: {type: string, description: Lower-case hostname extracted from canonical_url.}
         title: {type: string}
         snippet: {type: string}
         rank: {type: integer, minimum: 1}

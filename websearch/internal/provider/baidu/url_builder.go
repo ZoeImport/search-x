@@ -15,7 +15,7 @@ func BuildSearchURL(baseURL string, request domain.SearchRequest) (string, error
 		return "", fmt.Errorf("invalid Baidu browser base URL %q", baseURL)
 	}
 	values := parsed.Query()
-	values.Set("wd", request.Query)
+	values.Set("wd", request.UpstreamQuery())
 	if request.Page > 1 {
 		values.Set("rn", strconv.Itoa(request.Limit))
 		values.Set("pn", strconv.Itoa((request.Page-1)*request.Limit))

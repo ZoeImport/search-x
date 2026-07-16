@@ -375,3 +375,37 @@ func TestSearchServiceCachesRegionsIndependently(t *testing.T) {
 		t.Fatalf("expected one live call per region, provider calls=%d", got)
 	}
 }
+
+func TestSearchServiceCachesDomainFiltersIndependently(t *testing.T) {
+	p := &countingProvider{result: domain.SearchResponse{Provider: "baidu", Results: []domain.SearchResult{{Title: "Go"}}}}
+	service, _ := newServiceForTest(t, p, time.Now)
+
+	for _, domainName := range []string{"go.dev", "example.com"} {
+		_, err := service.Search(context.Background(), domain.SearchRequest{
+			Query: "golang", Provider: "baidu", Limit: 10, Page: 1,
+			Filters: domain.SearchFilters{IncludeDomains: []string{domainName}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := p.calls.Load(); got != 2 {
+		t.Fatalf("expected one live call per filter, provider calls=%d", got)
+	}
+}
+
+func TestSearchServiceRejectsProviderWithoutRequestedQueryCapabilities(t *testing.T) {
+	p := &countingProvider{result: domain.SearchResponse{Provider: "baidu"}}
+	service, _ := newServiceForTest(t, p, time.Now)
+	_, err := service.Search(context.Background(), domain.SearchRequest{
+		Query: "golang", Provider: domain.ProviderNameBaidu,
+		QueryOptions: domain.SearchQueryOptions{TitleTerms: []string{"guide"}},
+	})
+	var searchErr *domain.SearchError
+	if !errors.As(err, &searchErr) || searchErr.Code != domain.ErrInvalidRequest || searchErr.Retryable {
+		t.Fatalf("err=%#v", err)
+	}
+	if p.calls.Load() != 0 {
+		t.Fatalf("provider calls=%d", p.calls.Load())
+	}
+}

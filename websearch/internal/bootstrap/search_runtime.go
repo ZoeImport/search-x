@@ -278,7 +278,7 @@ func buildBaiduPool(configValue config.Config, artifacts baidu.ArtifactStore, he
 			closeCreated()
 			return nil, nil, createErr
 		}
-		profile, createErr := profilepool.NewProviderProfile(profileID, normalizedPositive(configValue.BaiduProfileCapacity, 1), searcher, func() error { chromeClient.Close(); return nil })
+		profile, createErr := profilepool.NewProviderProfile(profileID, normalizedPositive(configValue.BaiduProfileCapacity, 1), provider.NewPlanned(searcher), func() error { chromeClient.Close(); return nil })
 		if createErr != nil {
 			chromeClient.Close()
 			closeCreated()
@@ -313,7 +313,7 @@ func buildBingPool(configValue config.Config, artifacts bing.ArtifactStore, head
 				client.Close()
 				return nil, nil, err
 			}
-			return searcher, func() error { client.Close(); return nil }, nil
+			return provider.NewPlanned(searcher), func() error { client.Close(); return nil }, nil
 		})
 }
 
@@ -336,7 +336,7 @@ func buildBravePool(configValue config.Config, artifacts brave.ArtifactStore, he
 				client.Close()
 				return nil, nil, err
 			}
-			return searcher, func() error { client.Close(); return nil }, nil
+			return provider.NewPlanned(searcher), func() error { client.Close(); return nil }, nil
 		})
 }
 
@@ -385,16 +385,14 @@ func buildDuckDuckGoPool(configValue config.Config, headers headerprofile.Pool, 
 		id := fmt.Sprintf("duckduckgo-%04d", index+1)
 		var createProfile func() (profilepool.Profile, error)
 		createProfile = func() (profilepool.Profile, error) {
-			jar, err := cookiejar.New(nil)
-			if err != nil {
-				return nil, err
-			}
-			client := &http.Client{Transport: baseTransport, Jar: jar}
+			// DuckDuckGo's HTML endpoint does not require a persistent Cookie
+			// session. Retaining challenge cookies can poison later searches.
+			client := &http.Client{Transport: baseTransport}
 			searcher, err := duckduckgo.New(duckduckgo.Config{BaseURL: configValue.DuckDuckGoURL, UserAgent: configValue.UserAgent, Timeout: configValue.DuckDuckGoTimeout, MaxBodyBytes: configValue.MaxBodyBytes, HeaderProfiles: headers, HeaderProfileKey: id}, client)
 			if err != nil {
 				return nil, err
 			}
-			return profilepool.NewProviderProfileWithFactory(id, normalizedPositive(configValue.DuckDuckGoProfileCapacity, 1), searcher, nil, createProfile)
+			return profilepool.NewProviderProfileWithFactory(id, normalizedPositive(configValue.DuckDuckGoProfileCapacity, 1), provider.NewPlanned(searcher), nil, createProfile)
 		}
 		profile, err := createProfile()
 		if err != nil {

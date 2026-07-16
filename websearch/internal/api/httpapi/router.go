@@ -17,6 +17,7 @@ import (
 	"web-search-backend/runtime/requesttimeout"
 	"web-search-backend/websearch/internal/cursor"
 	"web-search-backend/websearch/internal/domain"
+	"web-search-backend/websearch/internal/searchplan"
 )
 
 type Searcher interface {
@@ -46,8 +47,17 @@ type searchPayload struct {
 		Providers []domain.ProviderName `json:"providers,omitempty"`
 	} `json:"routing,omitempty"`
 	Filters struct {
-		Region string `json:"region,omitempty"`
+		Region         string   `json:"region,omitempty"`
+		IncludeDomains []string `json:"include_domains,omitempty"`
+		ExcludeDomains []string `json:"exclude_domains,omitempty"`
 	} `json:"filters,omitempty"`
+	QueryOptions struct {
+		ExactPhrases []string `json:"exact_phrases,omitempty"`
+		AnyTerms     []string `json:"any_terms,omitempty"`
+		ExcludeTerms []string `json:"exclude_terms,omitempty"`
+		TitleTerms   []string `json:"title_terms,omitempty"`
+		FileTypes    []string `json:"file_types,omitempty"`
+	} `json:"query_options,omitempty"`
 }
 
 type searchEnvelope struct {
@@ -65,12 +75,14 @@ type usage struct {
 }
 
 type searchResult struct {
-	ID       string              `json:"id"`
-	URL      string              `json:"url"`
-	Title    string              `json:"title"`
-	Snippet  string              `json:"snippet"`
-	Rank     int                 `json:"rank"`
-	Provider domain.ProviderName `json:"provider,omitempty"`
+	ID           string              `json:"id"`
+	URL          string              `json:"url"`
+	CanonicalURL string              `json:"canonical_url"`
+	Domain       string              `json:"domain"`
+	Title        string              `json:"title"`
+	Snippet      string              `json:"snippet"`
+	Rank         int                 `json:"rank"`
+	Provider     domain.ProviderName `json:"provider,omitempty"`
 }
 type pageInfo struct {
 	NextCursor string `json:"next_cursor,omitempty"`
@@ -140,6 +152,35 @@ func New(options Options) (*gin.Engine, error) {
 			writeProblem(c, http.StatusForbidden, "provider_selection_forbidden", "Provider selection forbidden", "Request provider selection is disabled.", false, "routing.providers")
 			return
 		}
+		region, regionErr := domain.NormalizeRegion(payload.Filters.Region)
+		if regionErr != nil {
+			writeProblem(c, http.StatusBadRequest, "invalid_request", "Invalid region", regionErr.Error(), false, "filters.region")
+			return
+		}
+		normalizedRequest, normalizeErr := searchplan.Normalize(domain.SearchRequest{
+			Query: payload.Query, Providers: providers, Region: region, Limit: payload.Limit,
+			Filters: domain.SearchFilters{
+				IncludeDomains: payload.Filters.IncludeDomains,
+				ExcludeDomains: payload.Filters.ExcludeDomains,
+			},
+			QueryOptions: domain.SearchQueryOptions{
+				ExactPhrases: payload.QueryOptions.ExactPhrases,
+				AnyTerms:     payload.QueryOptions.AnyTerms,
+				ExcludeTerms: payload.QueryOptions.ExcludeTerms,
+				TitleTerms:   payload.QueryOptions.TitleTerms,
+				FileTypes:    payload.QueryOptions.FileTypes,
+			},
+		})
+		if normalizeErr != nil {
+			writeProblem(c, http.StatusBadRequest, "invalid_request", "Invalid advanced search options", normalizeErr.Error(), false, "filters")
+			return
+		}
+		normalizedRequest.Providers = searchplan.CompatibleProviders(normalizedRequest, normalizedRequest.Providers)
+		if len(normalizedRequest.Providers) == 0 {
+			writeProblem(c, http.StatusBadRequest, "unsupported_search_options", "Unsupported search options", "No enabled provider supports all requested query options.", false, "query_options")
+			return
+		}
+		providers = normalizedRequest.Providers
 		provider, page := domain.ProviderName(""), 1
 		if payload.Cursor != "" {
 			state, err := options.Cursor.Decode(payload.Cursor)
@@ -155,18 +196,31 @@ func New(options Options) (*gin.Engine, error) {
 			if len(payload.Routing.Providers) == 0 {
 				providers = cursorProviders
 			}
-			if state.QueryHash != cursor.QueryHash(payload.Query) || state.Limit != payload.Limit || !equalProviders(providers, cursorProviders) {
+			normalizedRequest.Providers = providers
+			normalizedRequest.Provider = domain.ProviderName(state.Provider)
+			fingerprintMatches := state.RequestFingerprint == searchplan.Fingerprint(normalizedRequest)
+			if state.Version == 1 {
+				fingerprintMatches = state.QueryHash == cursor.QueryHash(payload.Query) &&
+					region == "" && len(normalizedRequest.Filters.IncludeDomains) == 0 &&
+					len(normalizedRequest.Filters.ExcludeDomains) == 0 &&
+					len(normalizedRequest.QueryOptions.ExactPhrases)+len(normalizedRequest.QueryOptions.AnyTerms)+
+						len(normalizedRequest.QueryOptions.ExcludeTerms)+len(normalizedRequest.QueryOptions.TitleTerms)+
+						len(normalizedRequest.QueryOptions.FileTypes) == 0
+			}
+			if !fingerprintMatches || state.Limit != payload.Limit || !equalProviders(providers, cursorProviders) {
 				writeProblem(c, http.StatusBadRequest, "cursor_mismatch", "Cursor mismatch", "query, limit, and routing providers must match the first page.", false, "cursor")
 				return
 			}
 			provider, page = domain.ProviderName(state.Provider), state.ProviderPage
+			normalizedRequest.ProviderPageToken = state.ProviderPageToken
 		}
 		if _, ok := enabled[string(provider)]; provider != "" && !ok {
 			writeProblem(c, http.StatusServiceUnavailable, "provider_unavailable", "Provider unavailable", "The provider pinned by this cursor is not enabled.", true, "cursor")
 			return
 		}
 		requestID := requestIDValue(c)
-		request := domain.SearchRequest{Query: payload.Query, Providers: providers, Provider: provider, Region: payload.Filters.Region, Limit: payload.Limit, Page: page, Refresh: options.CacheBypass, RequestID: requestID}
+		request := normalizedRequest
+		request.Provider, request.Page, request.Refresh, request.RequestID = provider, page, options.CacheBypass, requestID
 		ctx, cancel := context.WithTimeout(c.Request.Context(), requestTimeout)
 		defer cancel()
 		response, err := options.Searcher.Search(ctx, request)
@@ -182,15 +236,27 @@ func New(options Options) (*gin.Engine, error) {
 		showProvider := options.ProviderVisibility == "public"
 		results := make([]searchResult, 0, len(response.Results))
 		for _, item := range response.Results {
-			result := searchResult{ID: resultID(item.URL), URL: item.URL, Title: item.Title, Snippet: item.Snippet, Rank: item.Rank}
+			result := searchResult{ID: resultID(item.URL), URL: item.URL, CanonicalURL: item.CanonicalURL, Domain: item.Domain, Title: item.Title, Snippet: item.Snippet, Rank: item.Rank}
 			if showProvider {
 				result.Provider = item.Provider
 			}
 			results = append(results, result)
 		}
 		pageResponse := pageInfo{}
-		if len(results) == payload.Limit && page < 10 {
-			token, encodeErr := options.Cursor.Encode(cursor.State{QueryHash: cursor.QueryHash(payload.Query), Provider: string(response.Provider), Providers: providerStrings(providers), ProviderPage: page + 1, Limit: payload.Limit})
+		hasMore := len(results) == payload.Limit && page < 10
+		if response.PaginationKnown {
+			hasMore = response.NextPageToken != "" && page < 10
+		}
+		if hasMore {
+			request.Provider = response.Provider
+			token, encodeErr := options.Cursor.Encode(cursor.State{
+				RequestFingerprint: searchplan.Fingerprint(request),
+				Provider:           string(response.Provider),
+				Providers:          providerStrings(providers),
+				ProviderPage:       page + 1,
+				ProviderPageToken:  response.NextPageToken,
+				Limit:              payload.Limit,
+			})
 			if encodeErr != nil {
 				writeProblem(c, http.StatusInternalServerError, "cursor_encoding_failed", "Pagination unavailable", "The next page could not be created.", true, "")
 				return

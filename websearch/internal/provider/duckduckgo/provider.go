@@ -1,13 +1,14 @@
 package duckduckgo
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -69,17 +70,13 @@ func (p *Provider) Name() domain.ProviderName {
 
 // Search fetches and parses one DuckDuckGo HTML result page.
 func (p *Provider) Search(ctx context.Context, request domain.SearchRequest) (domain.SearchResponse, error) {
-	requestURL, err := p.buildURL(request)
+	httpRequest, requestURL, err := p.newRequest(ctx, request)
 	if err != nil {
 		return domain.SearchResponse{}, searchError(domain.ErrInvalidRequest, false, err, domain.Attempt{})
 	}
 	requestContext, cancel := context.WithTimeout(ctx, p.config.Timeout)
 	defer cancel()
-	httpRequest, err := http.NewRequestWithContext(requestContext, http.MethodGet, requestURL, nil)
-	if err != nil {
-		attempt := domain.Attempt{Provider: p.Name(), Transport: domain.TransportNameDuckDuckGoHTTP, RequestURL: requestURL}
-		return domain.SearchResponse{}, searchError(domain.ErrProviderUnavailable, true, fmt.Errorf("create DuckDuckGo request: %w", err), attempt)
-	}
+	httpRequest = httpRequest.WithContext(requestContext)
 	httpRequest.Header.Set("User-Agent", p.config.UserAgent)
 	httpRequest.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	httpRequest.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.7")
@@ -139,8 +136,14 @@ func (p *Provider) Search(ctx context.Context, request domain.SearchRequest) (do
 		attempt.OriginalError = err.Error()
 		return domain.SearchResponse{}, searchError(domain.ErrProviderUnavailable, true, err, attempt)
 	}
+	if isHumanChallenge(body) {
+		err = fmt.Errorf("DuckDuckGo response classified as captcha")
+		attempt.Classification = detector.Captcha
+		attempt.OriginalError = err.Error()
+		return domain.SearchResponse{}, searchError(domain.ErrCaptchaRequired, true, err, attempt)
+	}
 
-	results, err := Parse(body, request.Limit)
+	results, nextPageToken, err := ParsePage(body, request.Limit)
 	if err != nil {
 		attempt.Classification = detector.ParseChanged
 		attempt.ParserError = err.Error()
@@ -155,8 +158,10 @@ func (p *Provider) Search(ctx context.Context, request domain.SearchRequest) (do
 			Transport:         domain.TransportNameDuckDuckGoHTTP,
 			RequestID:         request.RequestID,
 		},
-		Warnings: make([]domain.Warning, 0),
-		StoredAt: time.Now(),
+		Warnings:        make([]domain.Warning, 0),
+		StoredAt:        time.Now(),
+		PaginationKnown: true,
+		NextPageToken:   nextPageToken,
 	}
 	if request.Debug {
 		response.Debug = &domain.Debug{Attempts: []domain.Attempt{attempt}}
@@ -180,10 +185,50 @@ func (p *Provider) buildURL(request domain.SearchRequest) (string, error) {
 		return "", fmt.Errorf("parse DuckDuckGo base URL: %w", err)
 	}
 	values := parsed.Query()
-	values.Set("q", request.Query)
-	values.Set("s", strconv.Itoa((request.Page-1)*request.Limit))
+	values.Set("q", request.UpstreamQuery())
+	values.Set("s", "0")
 	parsed.RawQuery = values.Encode()
 	return parsed.String(), nil
+}
+
+func (p *Provider) newRequest(ctx context.Context, request domain.SearchRequest) (*http.Request, string, error) {
+	if request.Page <= 1 {
+		requestURL, err := p.buildURL(request)
+		if err != nil {
+			return nil, "", err
+		}
+		httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+		return httpRequest, requestURL, err
+	}
+	if strings.TrimSpace(request.ProviderPageToken) == "" {
+		return nil, "", fmt.Errorf("DuckDuckGo pagination token is required")
+	}
+	var values url.Values
+	if err := json.Unmarshal([]byte(request.ProviderPageToken), &values); err != nil {
+		return nil, "", fmt.Errorf("decode DuckDuckGo pagination token: %w", err)
+	}
+	if values.Get("q") != request.UpstreamQuery() || values.Get("s") == "" {
+		return nil, "", fmt.Errorf("DuckDuckGo pagination token does not match the request")
+	}
+	parsed, err := url.Parse(p.config.BaseURL)
+	if err != nil {
+		return nil, "", fmt.Errorf("parse DuckDuckGo base URL: %w", err)
+	}
+	parsed.RawQuery = ""
+	requestURL := parsed.String()
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewBufferString(values.Encode()))
+	if err != nil {
+		return nil, "", fmt.Errorf("create DuckDuckGo pagination request: %w", err)
+	}
+	httpRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return httpRequest, requestURL, nil
+}
+
+func isHumanChallenge(body []byte) bool {
+	lowerBody := strings.ToLower(string(body))
+	return strings.Contains(lowerBody, `id="challenge-form"`) ||
+		strings.Contains(lowerBody, `data-testid="anomaly-modal"`) ||
+		strings.Contains(lowerBody, "unfortunately, bots use duckduckgo too")
 }
 
 func searchError(code domain.ErrorCode, retryable bool, original error, attempt domain.Attempt) error {
@@ -191,6 +236,8 @@ func searchError(code domain.ErrorCode, retryable bool, original error, attempt 
 	switch code {
 	case domain.ErrInvalidRequest:
 		message = "DuckDuckGo 请求参数错误"
+	case domain.ErrCaptchaRequired:
+		message = "DuckDuckGo 返回安全验证页面"
 	case domain.ErrRateLimited:
 		message = "DuckDuckGo 限制了当前请求频率"
 	case domain.ErrUpstreamTimeout:

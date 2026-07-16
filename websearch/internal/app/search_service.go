@@ -13,6 +13,7 @@ import (
 
 	"web-search-backend/websearch/internal/domain"
 	"web-search-backend/websearch/internal/provider"
+	"web-search-backend/websearch/internal/searchplan"
 	"web-search-backend/websearch/internal/searchtrace"
 )
 
@@ -294,13 +295,26 @@ func normalizeRequest(request domain.SearchRequest) (domain.SearchRequest, error
 		return domain.SearchRequest{}, &domain.SearchError{Code: domain.ErrInvalidRequest, Message: "地区参数格式错误", Retryable: false, Original: err}
 	}
 	request.Region = region
+	request, err = searchplan.Normalize(request)
+	if err != nil {
+		return domain.SearchRequest{}, &domain.SearchError{Code: domain.ErrInvalidRequest, Message: "高级搜索参数格式错误", Retryable: false, Original: err}
+	}
+	if request.Provider != "" && request.Provider != domain.ProviderNameAuto {
+		if len(searchplan.CompatibleProviders(request, []domain.ProviderName{request.Provider})) == 0 {
+			return domain.SearchRequest{}, &domain.SearchError{Code: domain.ErrInvalidRequest, Message: "指定 Provider 不支持请求的高级搜索条件", Retryable: false}
+		}
+	}
+	if len(request.Providers) > 0 {
+		request.Providers = searchplan.CompatibleProviders(request, request.Providers)
+		if len(request.Providers) == 0 {
+			return domain.SearchRequest{}, &domain.SearchError{Code: domain.ErrInvalidRequest, Message: "没有 Provider 支持请求的高级搜索条件", Retryable: false}
+		}
+	} else if request.Provider == domain.ProviderNameAuto && searchplan.HasQueryOptions(request) {
+		return domain.SearchRequest{}, &domain.SearchError{Code: domain.ErrInvalidRequest, Message: "高级搜索请求必须提供可校验的 Provider 链", Retryable: false}
+	}
 	return request, nil
 }
 
 func cacheKey(request domain.SearchRequest) string {
-	providers := make([]string, len(request.Providers))
-	for index, name := range request.Providers {
-		providers[index] = string(name)
-	}
-	return fmt.Sprintf("%s|%s|%s|%d|%d|%s", request.Provider, strings.Join(providers, ","), request.Query, request.Page, request.Limit, request.Region)
+	return fmt.Sprintf("%s|%d|%s", request.Provider, request.Page, searchplan.Fingerprint(request))
 }

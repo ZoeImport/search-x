@@ -178,7 +178,7 @@ h1 em { color: var(--moss); font-weight: 400; }
 
 .parameter-grid {
   display: grid;
-  grid-template-columns: minmax(230px, 1.5fr) minmax(180px, 1fr) 100px 100px auto;
+  grid-template-columns: repeat(4, minmax(140px, 1fr));
   gap: 12px;
   align-items: end;
   padding: 17px 4px 2px;
@@ -186,6 +186,7 @@ h1 em { color: var(--moss); font-weight: 400; }
 
 .field { display: grid; gap: 7px; }
 .api-key-field { grid-column: 1 / -1; }
+.parameter-grid > .field:nth-child(2) { grid-column: span 2; }
 .field > span { color: var(--muted); font-size: 10px; font-weight: 750; letter-spacing: 0.08em; text-transform: uppercase; }
 .field input, .field select {
   width: 100%;

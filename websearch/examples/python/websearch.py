@@ -9,7 +9,16 @@ payload = json.dumps(
             "query": "golang",
             "limit": 10,
             "timeout": "20s",
-            "routing": {"providers": ["baidu", "bing"]},
+            "routing": {"providers": ["brave", "duckduckgo"]},
+            "filters": {
+                "include_domains": ["go.dev"],
+                "exclude_domains": ["example.com"],
+            },
+            "query_options": {
+                "exact_phrases": ["context package"],
+                "title_terms": ["documentation"],
+                "file_types": ["html"],
+            },
         }
     }
 ).encode()
