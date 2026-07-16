@@ -1,0 +1,36 @@
+server:
+  address: ":8081"
+  default_timeout: 20s
+  max_timeout: 60s
+  cors_allowed_origins: []
+  trusted_proxies: []
+http:
+  timeout: 6s
+  max_body_bytes: 5242880
+  max_redirects: 5
+  host_allowlist: []
+  user_agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/150 Safari/537.36
+  robots_policy: ignore
+browser:
+  enabled: true
+  timeout: 12s
+  post_load_wait: 250ms
+  slots: 4
+  chrome_path: ""
+  profile_dir: ./var/chrome-profile
+  headless: true
+  no_sandbox: false
+cache:
+  fresh_ttl: 30m
+  stale_ttl: 24h
+  max_items: 500
+  bypass: false
+observability:
+  diagnostics_enabled: false
+  store_url_query: false
+  log_level: info
+  log_file: ./log/webfetch-api.log
+  log_max_size_mb: 100
+  log_max_backups: 5
+  log_max_age_days: 7
+  log_compress: true

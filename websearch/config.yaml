@@ -1,0 +1,81 @@
+server:
+  address: ":8080"
+  default_timeout: 20s
+  max_timeout: 60s
+  cors_allowed_origins: []
+api:
+  cursor_key: local-development-only
+  cursor_ttl: 15m
+  enabled_providers: [baidu, bing, brave, duckduckgo]
+  allow_request_providers: true
+  provider_visibility: public
+  cache_bypass: false
+cache:
+  fresh_ttl: 15m
+  stale_ttl: 24h
+  max_items: 1000
+browser:
+  path: ""
+  headless: true
+  no_sandbox: false
+  slots: 2
+  chrome_timeout: 10s
+  user_agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/150 Safari/537.36
+  max_body_bytes: 4194304
+routing:
+  auto_wait: 2s
+  explicit_wait: 5s
+  max_provider_attempts: 3
+  minimum_attempt_budget: 3s
+  global_inflight_max: 100
+  auto_queue_max: 100
+  capacity_router_enabled: true
+  profile_pool_enabled: true
+  provider_rate: 1
+  provider_burst: 3
+  jitter_min: 200ms
+  jitter_max: 800ms
+  profile_manifest_root: ./var/provider-manifests
+providers:
+  baidu:
+    url: https://www.baidu.com/s
+    mobile_url: https://m.baidu.com/s
+    timeout: 4s
+    mobile_timeout: 4s
+    session_min_interval: 3s
+    session_jitter_max: 2s
+    captcha_cooldown: 30m
+    rate_limit_cooldown: 5m
+    fallback_reserve: 5s
+    profile_dir: ./var/chrome-profile
+    profile_count: 6
+    profile_capacity: 1
+  bing:
+    url: https://www.bing.com/search
+    timeout: 10s
+    profile_dir: ./var/chrome-profile-bing
+    profile_count: 5
+    profile_capacity: 2
+  brave:
+    url: https://search.brave.com/search
+    timeout: 10s
+    profile_dir: ./var/chrome-profile-brave
+    profile_count: 3
+    profile_capacity: 1
+  duckduckgo:
+    url: https://html.duckduckgo.com/html/
+    timeout: 5s
+    profile_count: 4
+    profile_capacity: 1
+observability:
+  diagnostics_enabled: false
+  debug_dir: ./var/debug
+  debug_preview_bytes: 32768
+  store_query: false
+  query_preview_chars: 32
+  log_level: info
+  log_file: ./log/websearch-api.log
+  log_max_size_mb: 100
+  log_max_backups: 5
+  log_max_age_days: 7
+  log_compress: true
