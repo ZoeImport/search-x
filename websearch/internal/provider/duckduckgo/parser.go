@@ -1,6 +1,7 @@
 package duckduckgo
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
@@ -12,13 +13,21 @@ import (
 
 // Parse extracts normalized search results from a DuckDuckGo HTML response.
 func Parse(body []byte, limit int) ([]domain.SearchResult, error) {
+	results, _, err := ParsePage(body, limit)
+	return results, err
+}
+
+// ParsePage extracts results and the opaque values from DuckDuckGo's real
+// Next form. The token is encrypted by the public API cursor before leaving
+// the service.
+func ParsePage(body []byte, limit int) ([]domain.SearchResult, string, error) {
 	document, err := goquery.NewDocumentFromReader(strings.NewReader(string(body)))
 	if err != nil {
-		return nil, fmt.Errorf("parse DuckDuckGo HTML: %w", err)
+		return nil, "", fmt.Errorf("parse DuckDuckGo HTML: %w", err)
 	}
 	root := document.Find("#links, .results").First()
 	if root.Length() == 0 {
-		return nil, fmt.Errorf("DuckDuckGo result root not found")
+		return nil, "", fmt.Errorf("DuckDuckGo result root not found")
 	}
 	results := make([]domain.SearchResult, 0)
 	root.Find(".result").EachWithBreak(func(_ int, item *goquery.Selection) bool {
@@ -43,7 +52,39 @@ func Parse(body []byte, limit int) ([]domain.SearchResult, error) {
 		})
 		return true
 	})
-	return results, nil
+	nextToken, err := encodeNextForm(root)
+	if err != nil {
+		return nil, "", err
+	}
+	return results, nextToken, nil
+}
+
+func encodeNextForm(root *goquery.Selection) (string, error) {
+	form := root.Find(".nav-link form").First()
+	if form.Length() == 0 {
+		return "", nil
+	}
+	values := make(url.Values)
+	allowed := map[string]struct{}{
+		"q": {}, "s": {}, "nextParams": {}, "v": {}, "o": {},
+		"dc": {}, "api": {}, "vqd": {}, "kl": {}, "df": {},
+	}
+	form.Find("input[name]").Each(func(_ int, input *goquery.Selection) {
+		name, _ := input.Attr("name")
+		if _, ok := allowed[name]; !ok {
+			return
+		}
+		value, _ := input.Attr("value")
+		values.Add(name, value)
+	})
+	if values.Get("q") == "" || values.Get("s") == "" {
+		return "", fmt.Errorf("DuckDuckGo next form is incomplete")
+	}
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return "", fmt.Errorf("encode DuckDuckGo next form: %w", err)
+	}
+	return string(encoded), nil
 }
 
 func resolveResultURL(rawURL string) (string, error) {

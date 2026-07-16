@@ -212,6 +212,7 @@ func New(options Options) (*gin.Engine, error) {
 				return
 			}
 			provider, page = domain.ProviderName(state.Provider), state.ProviderPage
+			normalizedRequest.ProviderPageToken = state.ProviderPageToken
 		}
 		if _, ok := enabled[string(provider)]; provider != "" && !ok {
 			writeProblem(c, http.StatusServiceUnavailable, "provider_unavailable", "Provider unavailable", "The provider pinned by this cursor is not enabled.", true, "cursor")
@@ -242,9 +243,20 @@ func New(options Options) (*gin.Engine, error) {
 			results = append(results, result)
 		}
 		pageResponse := pageInfo{}
-		if len(results) == payload.Limit && page < 10 {
+		hasMore := len(results) == payload.Limit && page < 10
+		if response.PaginationKnown {
+			hasMore = response.NextPageToken != "" && page < 10
+		}
+		if hasMore {
 			request.Provider = response.Provider
-			token, encodeErr := options.Cursor.Encode(cursor.State{RequestFingerprint: searchplan.Fingerprint(request), Provider: string(response.Provider), Providers: providerStrings(providers), ProviderPage: page + 1, Limit: payload.Limit})
+			token, encodeErr := options.Cursor.Encode(cursor.State{
+				RequestFingerprint: searchplan.Fingerprint(request),
+				Provider:           string(response.Provider),
+				Providers:          providerStrings(providers),
+				ProviderPage:       page + 1,
+				ProviderPageToken:  response.NextPageToken,
+				Limit:              payload.Limit,
+			})
 			if encodeErr != nil {
 				writeProblem(c, http.StatusInternalServerError, "cursor_encoding_failed", "Pagination unavailable", "The next page could not be created.", true, "")
 				return

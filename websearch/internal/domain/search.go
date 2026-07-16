@@ -154,6 +154,9 @@ type SearchRequest struct {
 	// ProviderQuery is an internal provider-specific compilation of Query and
 	// advanced options. It is never accepted from or returned to API clients.
 	ProviderQuery string
+	// ProviderPageToken is an encrypted-cursor-carried continuation token.
+	// Only the pinned Provider interprets its contents.
+	ProviderPageToken string
 }
 
 func (request SearchRequest) UpstreamQuery() string {
@@ -243,11 +246,13 @@ type Debug struct {
 }
 
 type SearchResponse struct {
-	Query    string         `json:"query"`
-	Provider ProviderName   `json:"provider"`
-	Results  []SearchResult `json:"results"`
-	Meta     Meta           `json:"meta"`
-	Warnings []Warning      `json:"warnings"`
-	Debug    *Debug         `json:"debug,omitempty"`
-	StoredAt time.Time      `json:"-"`
+	Query           string         `json:"query"`
+	Provider        ProviderName   `json:"provider"`
+	Results         []SearchResult `json:"results"`
+	Meta            Meta           `json:"meta"`
+	Warnings        []Warning      `json:"warnings"`
+	Debug           *Debug         `json:"debug,omitempty"`
+	StoredAt        time.Time      `json:"-"`
+	PaginationKnown bool           `json:"-"`
+	NextPageToken   string         `json:"-"`
 }

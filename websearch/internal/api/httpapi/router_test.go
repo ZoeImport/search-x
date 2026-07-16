@@ -16,13 +16,20 @@ import (
 )
 
 type fakeSearcher struct {
-	request  domain.SearchRequest
-	warnings []domain.Warning
+	request           domain.SearchRequest
+	warnings          []domain.Warning
+	paginationKnown   bool
+	nextProviderToken string
 }
 
 func (fake *fakeSearcher) Search(_ context.Context, request domain.SearchRequest) (domain.SearchResponse, error) {
 	fake.request = request
-	return domain.SearchResponse{Query: request.Query, Provider: domain.ProviderNameBing, Results: []domain.SearchResult{{Title: "Go", URL: "https://go.dev", Snippet: "Go language", Rank: 1, Provider: domain.ProviderNameBing}}, Meta: domain.Meta{TookMS: 4}, Warnings: fake.warnings}, nil
+	return domain.SearchResponse{
+		Query: request.Query, Provider: domain.ProviderNameBing,
+		Results: []domain.SearchResult{{Title: "Go", URL: "https://go.dev", Snippet: "Go language", Rank: 1, Provider: domain.ProviderNameBing}},
+		Meta:    domain.Meta{TookMS: 4}, Warnings: fake.warnings,
+		PaginationKnown: fake.paginationKnown, NextPageToken: fake.nextProviderToken,
+	}, nil
 }
 
 func TestPOSTSearchContractAndProviderVisibility(t *testing.T) {
@@ -98,6 +105,39 @@ func TestCursorBindsOrderedProviderChainAndPinsProvider(t *testing.T) {
 	router.ServeHTTP(pinned, httptest.NewRequest(http.MethodPost, "/v1/websearch", strings.NewReader(`{"query":"go","limit":1,"cursor":"`+token+`"}`)))
 	if pinned.Code != http.StatusOK || searcher.request.Provider != domain.ProviderNameBing {
 		t.Fatalf("pinned=%d request=%+v body=%s", pinned.Code, searcher.request, pinned.Body.String())
+	}
+}
+
+func TestCursorCarriesOpaqueProviderContinuationToken(t *testing.T) {
+	searcher := &fakeSearcher{paginationKnown: true, nextProviderToken: "provider-next-form"}
+	codec, _ := cursor.New("secret", time.Minute, time.Now)
+	router, _ := New(Options{
+		Searcher: searcher, Cursor: codec, Ready: func() bool { return true },
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), AllowRequestProviders: true,
+		EnabledProviders: []string{"bing"}, ProviderVisibility: "public",
+	})
+	first := httptest.NewRecorder()
+	router.ServeHTTP(first, httptest.NewRequest(http.MethodPost, "/v1/websearch", strings.NewReader(
+		`{"query":"go","limit":1,"routing":{"providers":["bing"]}}`,
+	)))
+	if first.Code != http.StatusOK {
+		t.Fatalf("first=%d %s", first.Code, first.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(first.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	token := body["page"].(map[string]any)["next_cursor"].(string)
+	searcher.nextProviderToken = ""
+	next := httptest.NewRecorder()
+	router.ServeHTTP(next, httptest.NewRequest(http.MethodPost, "/v1/websearch", strings.NewReader(
+		`{"query":"go","limit":1,"cursor":"`+token+`"}`,
+	)))
+	if next.Code != http.StatusOK {
+		t.Fatalf("next=%d %s", next.Code, next.Body.String())
+	}
+	if searcher.request.ProviderPageToken != "provider-next-form" {
+		t.Fatalf("provider page token=%q", searcher.request.ProviderPageToken)
 	}
 }
 

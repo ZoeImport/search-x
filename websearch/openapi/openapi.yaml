@@ -58,7 +58,7 @@ components:
       properties:
         query: {type: string, minLength: 1, maxLength: 256}
         limit: {type: integer, minimum: 1, maximum: 20, default: 10}
-        cursor: {type: string, maxLength: 4096, description: Opaque token returned by page.next_cursor. It binds the normalized query, filters, query options, limit and ordered compatible provider chain, and pins pagination to the selected provider.}
+        cursor: {type: string, maxLength: 4096, description: Opaque token returned by page.next_cursor. It binds the normalized query, filters, query options, limit and ordered compatible provider chain, pins pagination to the selected provider, and may carry encrypted provider continuation state.}
         timeout: {type: string, pattern: '^[1-9][0-9]*(ms|s)$', default: 20s, examples: [1500ms, 20s], description: Total request budget from 100ms through the configured maximum (at most 60s).}
         routing:
           type: object

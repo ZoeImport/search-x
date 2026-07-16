@@ -38,7 +38,7 @@ WEBSEARCH_RESPONSE_PROVIDER_VISIBILITY=public
 
 搜索结果新增 `canonical_url` 和 `domain`。服务会移除 fragment、默认端口和常见跟踪参数，并按 canonical URL 去重。`url` 仍保留 Provider 返回的原始导航地址；`id` 仍基于该原始 URL 字符串生成。
 
-第一页成功后，`cur_v2` cursor 会绑定规范化 query、region、filters、query options、limit 和兼容 Provider 顺序，并固定实际 Provider；后续页不跨 Provider 降级。
+第一页成功后，`cur_v2` cursor 会绑定规范化 query、region、filters、query options、limit 和兼容 Provider 顺序，并固定实际 Provider。需要上游 continuation state 的 Provider 会把 opaque state 一并加密进 cursor；后续页不跨 Provider 降级。
 
 ## 主要配置
 

@@ -24,6 +24,7 @@ type State struct {
 	Provider           string    `json:"p"`
 	Providers          []string  `json:"ps"`
 	ProviderPage       int       `json:"n"`
+	ProviderPageToken  string    `json:"pt,omitempty"`
 	Limit              int       `json:"l"`
 	ExpiresAt          time.Time `json:"e"`
 }

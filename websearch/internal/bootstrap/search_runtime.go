@@ -385,11 +385,9 @@ func buildDuckDuckGoPool(configValue config.Config, headers headerprofile.Pool, 
 		id := fmt.Sprintf("duckduckgo-%04d", index+1)
 		var createProfile func() (profilepool.Profile, error)
 		createProfile = func() (profilepool.Profile, error) {
-			jar, err := cookiejar.New(nil)
-			if err != nil {
-				return nil, err
-			}
-			client := &http.Client{Transport: baseTransport, Jar: jar}
+			// DuckDuckGo's HTML endpoint does not require a persistent Cookie
+			// session. Retaining challenge cookies can poison later searches.
+			client := &http.Client{Transport: baseTransport}
 			searcher, err := duckduckgo.New(duckduckgo.Config{BaseURL: configValue.DuckDuckGoURL, UserAgent: configValue.UserAgent, Timeout: configValue.DuckDuckGoTimeout, MaxBodyBytes: configValue.MaxBodyBytes, HeaderProfiles: headers, HeaderProfileKey: id}, client)
 			if err != nil {
 				return nil, err
