@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: websearch-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: websearch-api}
+  template:
+    metadata:
+      labels: {app: websearch-api}
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: websearch-api
+          image: example/websearch-api:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: http, containerPort: 8080}
+          env:
+            - {name: WEBSEARCH_ADDR, value: ':8080'}
+            - {name: WEBSEARCH_CHROME_PATH, value: /usr/bin/chromium}
+            - {name: WEBSEARCH_CHROME_NO_SANDBOX, value: 'true'}
+            - {name: WEBSEARCH_CHROME_PROFILE_DIR, value: /data/profiles/baidu}
+            - {name: WEBSEARCH_BING_PROFILE_DIR, value: /data/profiles/bing}
+            - {name: WEBSEARCH_BRAVE_PROFILE_DIR, value: /data/profiles/brave}
+            - {name: WEBSEARCH_PROFILE_MANIFEST_ROOT, value: /data/manifests}
+            - {name: WEBSEARCH_DEBUG_DIR, value: /data/debug}
+            - {name: WEBSEARCH_LOG_FILE, value: /var/log/websearch-api/websearch.log}
+            - {name: WEBSEARCH_ALLOW_REQUEST_PROVIDERS, value: 'true'}
+            - {name: WEBSEARCH_RESPONSE_PROVIDER_VISIBILITY, value: public}
+            - name: WEBSEARCH_CURSOR_KEY
+              valueFrom:
+                secretKeyRef: {name: websearch-api-secrets, key: cursor-key}
+          resources:
+            requests: {cpu: 500m, memory: 1Gi}
+            limits: {cpu: '2', memory: 4Gi}
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          volumeMounts:
+            - {name: profiles, mountPath: /data/profiles}
+            - {name: manifests, mountPath: /data/manifests}
+            - {name: debug, mountPath: /data/debug}
+            - {name: logs, mountPath: /var/log/websearch-api}
+      volumes:
+        - {name: profiles, emptyDir: {}}
+        - {name: manifests, emptyDir: {}}
+        - {name: debug, emptyDir: {}}
+        - {name: logs, emptyDir: {}}

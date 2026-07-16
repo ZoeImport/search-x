@@ -1,0 +1,121 @@
+openapi: 3.1.0
+info:
+  title: WebFetch API
+  version: 1.0.0
+  description: API Market test contract for the WebFetch single URL reader.
+servers:
+  - url: https://tapi.insmtx.com/v6/se/general
+paths:
+  /fetch:
+    post:
+      operationId: webfetch
+      summary: Read one public URL
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MarketReadRequest'}
+      responses:
+        '200':
+          description: Extracted document
+          headers:
+            X-Request-Id: {schema: {type: string}}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MarketReadResponse'}
+        '400': {$ref: '#/components/responses/Problem'}
+        '403': {$ref: '#/components/responses/Problem'}
+        '413': {$ref: '#/components/responses/Problem'}
+        '415': {$ref: '#/components/responses/Problem'}
+        '422': {$ref: '#/components/responses/Problem'}
+        '502': {$ref: '#/components/responses/Problem'}
+        '504': {$ref: '#/components/responses/Problem'}
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    MarketReadRequest:
+      type: object
+      additionalProperties: false
+      required: [request]
+      properties:
+        request: {$ref: '#/components/schemas/ReadRequest'}
+    MarketReadResponse:
+      type: object
+      required: [code, message, response]
+      properties:
+        code: {type: integer, const: 0}
+        message: {type: string}
+        response: {$ref: '#/components/schemas/ReadResponse'}
+    ReadRequest:
+      type: object
+      additionalProperties: false
+      required: [url]
+      properties:
+        url: {type: string, format: uri, maxLength: 2048}
+        timeout: {type: string, pattern: '^[1-9][0-9]*(ms|s)$', default: 20s, examples: [1500ms, 20s], description: Total request budget from 100ms through the configured maximum (at most 60s).}
+        output:
+          type: object
+          additionalProperties: false
+          properties:
+            format: {type: string, enum: [markdown, text], default: markdown}
+            max_chars: {type: integer, minimum: 1000, maximum: 100000, default: 30000}
+    ReadResponse:
+      type: object
+      required: [request_id, document, meta, warnings, usage]
+      properties:
+        request_id: {type: string}
+        document:
+          type: object
+          required: [url, final_url, source_type, content_type, status_code, content, format, retrieved_at]
+          properties:
+            url: {type: string, format: uri}
+            final_url: {type: string, format: uri}
+            title: {type: string}
+            author: {type: string}
+            published_at: {type: string}
+            language: {type: string}
+            source_type: {type: string, enum: [html, text]}
+            content_type: {type: string, description: Normalized upstream MIME media type.}
+            status_code: {type: integer, minimum: 100, maximum: 599}
+            content: {type: string}
+            format: {type: string, enum: [markdown, text]}
+            retrieved_at: {type: string, format: date-time}
+        meta:
+          type: object
+          required: [cached, transport, truncated, content_length, took_ms]
+          properties:
+            cached: {type: boolean}
+            transport: {type: string, enum: [http, chromedp, fresh_cache, stale_cache]}
+            truncated: {type: boolean}
+            content_length: {type: integer, minimum: 0, description: Unicode code point count of document.content.}
+            cache_age_seconds: {type: integer, minimum: 0}
+            took_ms: {type: integer, minimum: 0}
+        usage:
+          type: object
+          required: [units]
+          properties:
+            units: {type: integer, const: 1}
+        warnings: {type: array, items: {type: object}}
+    Problem:
+      type: object
+      required: [type, title, status, code, detail, request_id, retryable]
+      properties:
+        type: {type: string, format: uri}
+        title: {type: string}
+        status: {type: integer}
+        code: {type: string}
+        detail: {type: string}
+        request_id: {type: string}
+        retryable: {type: boolean}
+        parameter: {type: string}
+  responses:
+    Problem:
+      description: Typed error
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}

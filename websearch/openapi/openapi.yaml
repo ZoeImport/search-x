@@ -1,0 +1,132 @@
+openapi: 3.1.0
+info:
+  title: WebSearch API
+  version: 1.0.0
+  description: API Market test contract for the atomic WebSearch API.
+servers:
+  - url: https://tapi.insmtx.com/v6/se/general
+paths:
+  /search:
+    post:
+      operationId: websearch
+      summary: Search the web
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MarketSearchRequest'
+      responses:
+        '200':
+          description: Search results
+          headers:
+            X-Request-Id: {schema: {type: string}}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MarketSearchResponse'}
+        '400': {$ref: '#/components/responses/Problem'}
+        '403': {$ref: '#/components/responses/Problem'}
+        '429': {$ref: '#/components/responses/Problem'}
+        '502': {$ref: '#/components/responses/Problem'}
+        '503': {$ref: '#/components/responses/Problem'}
+        '504': {$ref: '#/components/responses/Problem'}
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    MarketSearchRequest:
+      type: object
+      additionalProperties: false
+      required: [request]
+      properties:
+        request: {$ref: '#/components/schemas/SearchRequest'}
+    MarketSearchResponse:
+      type: object
+      required: [code, message, response]
+      properties:
+        code: {type: integer, const: 0}
+        message: {type: string}
+        response: {$ref: '#/components/schemas/SearchResponse'}
+    SearchRequest:
+      type: object
+      additionalProperties: false
+      required: [query]
+      properties:
+        query: {type: string, minLength: 1, maxLength: 256}
+        limit: {type: integer, minimum: 1, maximum: 20, default: 10}
+        cursor: {type: string, maxLength: 4096, description: Opaque token returned by page.next_cursor. It pins pagination to the selected provider and original ordered chain.}
+        timeout: {type: string, pattern: '^[1-9][0-9]*(ms|s)$', default: 20s, examples: [1500ms, 20s], description: Total request budget from 100ms through the configured maximum (at most 60s).}
+        routing:
+          type: object
+          additionalProperties: false
+          properties:
+            providers:
+              type: array
+              uniqueItems: true
+              minItems: 1
+              items: {type: string, enum: [baidu, bing, brave, duckduckgo]}
+              description: Ordered enabled subset used as a strict first-page fallback chain. Defaults to baidu, bing, brave, duckduckgo.
+        filters:
+          type: object
+          additionalProperties: false
+          properties:
+            region: {type: string, pattern: '^[A-Za-z]{2}$', description: ISO 3166-1 alpha-2 region hint.}
+    SearchResult:
+      type: object
+      required: [id, url, title, snippet, rank]
+      properties:
+        id: {type: string, description: Stable only for the exact returned URL string; it is not a canonical page identity.}
+        url: {type: string, format: uri}
+        title: {type: string}
+        snippet: {type: string}
+        rank: {type: integer, minimum: 1}
+        provider: {type: string, description: Optional and controlled by response visibility configuration.}
+    SearchResponse:
+      type: object
+      required: [request_id, query, results, page, meta, warnings, usage]
+      properties:
+        request_id: {type: string}
+        query: {type: string}
+        results: {type: array, items: {$ref: '#/components/schemas/SearchResult'}}
+        page:
+          type: object
+          required: [has_more]
+          properties:
+            next_cursor: {type: string}
+            has_more: {type: boolean}
+        meta:
+          type: object
+          required: [cached, took_ms]
+          properties:
+            cached: {type: boolean}
+            cache_age_seconds: {type: integer, minimum: 0}
+            took_ms: {type: integer, minimum: 0}
+            provider: {type: string}
+        usage:
+          type: object
+          required: [units]
+          properties:
+            units: {type: integer, const: 1}
+        warnings: {type: array, items: {type: object}}
+    Problem:
+      type: object
+      required: [type, title, status, code, detail, request_id, retryable]
+      properties:
+        type: {type: string, format: uri}
+        title: {type: string}
+        status: {type: integer}
+        code: {type: string}
+        detail: {type: string}
+        request_id: {type: string}
+        retryable: {type: boolean}
+        parameter: {type: string}
+  responses:
+    Problem:
+      description: Typed error
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}

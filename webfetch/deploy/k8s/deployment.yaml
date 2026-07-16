@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webfetch-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: webfetch-api}
+  template:
+    metadata:
+      labels: {app: webfetch-api}
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: webfetch-api
+          image: example/webfetch-api:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: http, containerPort: 8081}
+          env:
+            - {name: WEBFETCH_ADDR, value: ':8081'}
+            - {name: WEBFETCH_CHROME_PATH, value: /usr/bin/chromium}
+            - {name: WEBFETCH_CHROME_NO_SANDBOX, value: 'true'}
+            - {name: WEBFETCH_BROWSER_PROFILE_DIR, value: /data/profile}
+            - {name: WEBFETCH_LOG_FILE, value: /var/log/webfetch-api/webfetch.log}
+            - {name: WEBFETCH_ROBOTS_POLICY, value: ignore}
+          resources:
+            requests: {cpu: 500m, memory: 2Gi}
+            limits: {cpu: '2', memory: 4Gi}
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - {name: profile, mountPath: /data/profile}
+            - {name: logs, mountPath: /var/log/webfetch-api}
+      volumes:
+        - {name: profile, emptyDir: {}}
+        - {name: logs, emptyDir: {}}

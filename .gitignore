@@ -1,9 +1,16 @@
-/search-api
+/websearch-api
+/webfetch-api
 /server
 /bin/
 /var/
 /tmp/
 /log/
+/websearch/var/
+/websearch/tmp/
+/websearch/log/
+/webfetch/var/
+/webfetch/tmp/
+/webfetch/log/
 /jq
 *.log
 .DS_Store

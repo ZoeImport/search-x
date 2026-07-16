@@ -2,7 +2,8 @@
 .gitignore
 var
 bin
-search-api
+websearch-api
+webfetch-api
 server
 *.log
 README.md

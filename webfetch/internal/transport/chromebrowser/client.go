@@ -1,0 +1,272 @@
+package chromebrowser
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/chromedp/cdproto/emulation"
+	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/chromedp"
+
+	"web-search-backend/webfetch/internal/headerprofile"
+	"web-search-backend/webfetch/internal/transport"
+)
+
+type Config struct {
+	ProfileDir string
+	ExecPath   string
+	Timeout    time.Duration
+	// MaxConcurrentTabs bounds simultaneous tabs owned by this browser client.
+	MaxConcurrentTabs int
+	// PostLoadWait allows page scripts to replace an initial JavaScript shell before DOM capture.
+	PostLoadWait   time.Duration
+	Headless       bool
+	DisableSandbox bool
+	MaxBodyBytes   int
+	// HeaderProfiles selects a coherent, sticky request identity per logical request.
+	HeaderProfiles headerprofile.Pool
+	// HeaderProfileKey pins an Agent Profile to one coherent header identity.
+	HeaderProfileKey string
+}
+
+type Client struct {
+	config        Config
+	allocatorCtx  context.Context
+	allocatorStop context.CancelFunc
+	browserCtx    context.Context
+	browserStop   context.CancelFunc
+	browserInit   func(context.Context) error
+	browserInitMu sync.Mutex
+	browserReady  bool
+	semaphore     chan struct{}
+	closeOnce     sync.Once
+}
+
+func New(config Config) (*Client, error) {
+	config.ProfileDir = strings.TrimSpace(config.ProfileDir)
+	if config.ProfileDir == "" {
+		return nil, fmt.Errorf("chrome profile directory is empty")
+	}
+	if config.Timeout <= 0 {
+		return nil, fmt.Errorf("chrome timeout must be positive")
+	}
+	if config.MaxBodyBytes <= 0 {
+		config.MaxBodyBytes = 4 << 20
+	}
+	if config.MaxConcurrentTabs <= 0 {
+		config.MaxConcurrentTabs = 1
+	}
+	if err := os.MkdirAll(config.ProfileDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create chrome profile directory: %w", err)
+	}
+
+	opts := append([]chromedp.ExecAllocatorOption{}, chromedp.DefaultExecAllocatorOptions[:]...)
+	opts = append(opts,
+		chromedp.UserDataDir(config.ProfileDir),
+		chromedp.Flag("headless", config.Headless),
+		chromedp.Flag("disable-gpu", true),
+		chromedp.Flag("no-first-run", true),
+		chromedp.Flag("no-default-browser-check", true),
+		chromedp.Flag("no-sandbox", config.DisableSandbox),
+	)
+	if config.ExecPath != "" {
+		opts = append(opts, chromedp.ExecPath(config.ExecPath))
+	}
+	allocatorCtx, allocatorStop := chromedp.NewExecAllocator(context.Background(), opts...)
+	browserCtx, browserStop := chromedp.NewContext(allocatorCtx)
+	return &Client{
+		config:        config,
+		allocatorCtx:  allocatorCtx,
+		allocatorStop: allocatorStop,
+		browserCtx:    browserCtx,
+		browserStop:   browserStop,
+		browserInit: func(ctx context.Context) error {
+			return chromedp.Run(ctx)
+		},
+		semaphore: make(chan struct{}, config.MaxConcurrentTabs),
+	}, nil
+}
+
+// FetchURL renders an already constructed URL and returns the final DOM.
+func (c *Client) FetchURL(ctx context.Context, requestURL string) (transport.Response, error) {
+	if strings.TrimSpace(requestURL) == "" {
+		return transport.Response{}, fmt.Errorf("chromedp request URL is empty")
+	}
+	return c.fetchURL(ctx, requestURL)
+}
+
+func (c *Client) fetchURL(ctx context.Context, requestURL string) (transport.Response, error) {
+	response := transport.Response{RequestURL: requestURL}
+	select {
+	case c.semaphore <- struct{}{}:
+		defer func() { <-c.semaphore }()
+	case <-ctx.Done():
+		return response, fmt.Errorf("wait for chromedp slot: %w", ctx.Err())
+	}
+	if err := ctx.Err(); err != nil {
+		return response, fmt.Errorf("start chromedp request: %w", err)
+	}
+	if err := c.ensureBrowser(); err != nil {
+		return response, fmt.Errorf("initialize chromedp browser: %w", err)
+	}
+
+	tabCtx, tabCancel := chromedp.NewContext(c.browserCtx)
+	defer tabCancel()
+	operationCtx, operationCancel := context.WithTimeout(tabCtx, c.config.Timeout)
+	stopRequestCancellation := context.AfterFunc(ctx, operationCancel)
+	defer stopRequestCancellation()
+	defer operationCancel()
+	started := time.Now()
+
+	actions := chromedp.Tasks{network.Enable()}
+	if c.config.HeaderProfiles != nil {
+		profile, err := c.selectHeaderProfile(requestURL, 0)
+		if err != nil {
+			return response, fmt.Errorf("select chromedp header profile: %w", err)
+		}
+		response.HeaderProfile = string(profile.Name)
+		actions = append(actions, profileActions(profile)...)
+	}
+	actions = append(actions, chromedp.Navigate(requestURL))
+	if err := chromedp.Run(operationCtx, actions); err != nil {
+		response.Elapsed = time.Since(started)
+		c.captureBestEffort(operationCtx, &response)
+		return response, fmt.Errorf("chromedp navigate: %w", err)
+	}
+	if err := chromedp.Run(operationCtx, chromedp.WaitReady("body", chromedp.ByQuery)); err != nil {
+		response.Elapsed = time.Since(started)
+		c.captureBestEffort(operationCtx, &response)
+		return response, fmt.Errorf("chromedp wait body: %w", err)
+	}
+	if c.config.PostLoadWait > 0 {
+		if err := chromedp.Run(operationCtx, chromedp.Sleep(c.config.PostLoadWait)); err != nil {
+			response.Elapsed = time.Since(started)
+			c.captureBestEffort(operationCtx, &response)
+			return response, fmt.Errorf("chromedp wait for rendered content: %w", err)
+		}
+	}
+	if err := c.captureDOM(operationCtx, &response); err != nil {
+		response.Elapsed = time.Since(started)
+		c.captureScreenshot(operationCtx, &response)
+		return response, err
+	}
+	c.captureScreenshot(operationCtx, &response)
+	response.StatusCode = 200
+	response.Elapsed = time.Since(started)
+	if len(response.Body) > c.config.MaxBodyBytes {
+		response.Body = response.Body[:c.config.MaxBodyBytes]
+		return response, fmt.Errorf("chromedp response body exceeds %d bytes", c.config.MaxBodyBytes)
+	}
+	return response, nil
+}
+
+func (c *Client) selectHeaderProfile(requestKey string, attempt int) (headerprofile.Profile, error) {
+	if c.config.HeaderProfiles == nil {
+		return headerprofile.Profile{}, fmt.Errorf("chromedp header profile pool is nil")
+	}
+	key := c.config.HeaderProfileKey
+	if key != "" {
+		return c.config.HeaderProfiles.Select(key, attempt)
+	}
+	key = requestKey
+	return c.config.HeaderProfiles.Select(key, attempt)
+}
+
+func profileActions(profile headerprofile.Profile) chromedp.Tasks {
+	userAgentAction := emulation.SetUserAgentOverride(profile.UserAgent).
+		WithAcceptLanguage(profile.AcceptLanguage).
+		WithPlatform(profile.Platform)
+	if profile.ClientHints != nil {
+		userAgentAction = userAgentAction.WithUserAgentMetadata(toUserAgentMetadata(profile.ClientHints))
+	}
+	actions := chromedp.Tasks{userAgentAction}
+	if len(profile.Headers) > 0 {
+		headers := make(network.Headers, len(profile.Headers))
+		for key, value := range profile.Headers {
+			headers[key] = value
+		}
+		actions = append(actions, network.SetExtraHTTPHeaders(headers))
+	}
+	if profile.ViewportWidth > 0 && profile.ViewportHeight > 0 {
+		scale := profile.DeviceScaleFactor
+		if scale <= 0 {
+			scale = 1
+		}
+		actions = append(actions, emulation.SetDeviceMetricsOverride(
+			profile.ViewportWidth, profile.ViewportHeight, scale, false,
+		))
+	}
+	return actions
+}
+
+func toUserAgentMetadata(hints *headerprofile.ClientHints) *emulation.UserAgentMetadata {
+	if hints == nil {
+		return nil
+	}
+	return &emulation.UserAgentMetadata{
+		Brands: toBrandVersions(hints.Brands), FullVersionList: toBrandVersions(hints.FullVersionList),
+		Platform: hints.Platform, PlatformVersion: hints.PlatformVersion,
+		Architecture: hints.Architecture, Model: hints.Model, Mobile: hints.Mobile, Bitness: hints.Bitness,
+	}
+}
+
+func toBrandVersions(brands []headerprofile.BrandVersion) []*emulation.UserAgentBrandVersion {
+	converted := make([]*emulation.UserAgentBrandVersion, 0, len(brands))
+	for _, brand := range brands {
+		converted = append(converted, &emulation.UserAgentBrandVersion{Brand: brand.Brand, Version: brand.Version})
+	}
+	return converted
+}
+
+func (c *Client) ensureBrowser() error {
+	c.browserInitMu.Lock()
+	defer c.browserInitMu.Unlock()
+	if c.browserReady {
+		return nil
+	}
+	if c.browserInit == nil {
+		return fmt.Errorf("chromedp browser initializer is nil")
+	}
+	if err := c.browserInit(c.browserCtx); err != nil {
+		return err
+	}
+	c.browserReady = true
+	return nil
+}
+
+func (c *Client) captureBestEffort(ctx context.Context, response *transport.Response) {
+	_ = c.captureDOM(ctx, response)
+	c.captureScreenshot(ctx, response)
+}
+
+func (c *Client) captureDOM(ctx context.Context, response *transport.Response) error {
+	var html string
+	var finalURL string
+	if err := chromedp.Run(ctx,
+		chromedp.Location(&finalURL),
+		chromedp.OuterHTML("html", &html, chromedp.ByQuery),
+	); err != nil {
+		return fmt.Errorf("chromedp capture DOM: %w", err)
+	}
+	response.FinalURL = finalURL
+	response.Body = []byte(html)
+	return nil
+}
+
+func (c *Client) captureScreenshot(ctx context.Context, response *transport.Response) {
+	var screenshot []byte
+	if err := chromedp.Run(ctx, chromedp.FullScreenshot(&screenshot, 85)); err == nil {
+		response.Screenshot = screenshot
+	}
+}
+
+func (c *Client) Close() {
+	c.closeOnce.Do(func() {
+		c.browserStop()
+		c.allocatorStop()
+	})
+}

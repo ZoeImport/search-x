@@ -1,54 +1,46 @@
 .DEFAULT_GOAL := run
 
 GO ?= go
-BINARY ?= bin/search-api
-Q ?= golang
-LOG_DIR ?= log
-LOG_FILE ?= $(LOG_DIR)/server.log
-COMPOSE ?= $(shell if docker compose version >/dev/null 2>&1; then echo "docker compose"; elif command -v docker-compose >/dev/null 2>&1; then echo "docker-compose"; fi)
+PYTHON ?= python3
+DEMO_ORIGINS ?= http://127.0.0.1:8090,http://localhost:8090
+DEMO_WEBSEARCH_ALLOW_REQUEST_PROVIDERS ?= true
+DEMO_WEBSEARCH_PROVIDER_VISIBILITY ?= public
 
-.PHONY: run build test test-race vet check smoke require-compose docker-build docker-up docker-down docker-logs docker-ps help
-.NOTPARALLEL: check
+.PHONY: run run-websearch run-webfetch run-demo check test test-race vet build
 
-run: ## Run the Gin API locally
-	mkdir -p $(LOG_DIR)
-	set -o pipefail; $(GO) run ./cmd/server 2>&1 | tee -a $(LOG_FILE)
+run:
+	$(MAKE) -j3 run-websearch run-webfetch run-demo
 
-build: ## Build the API binary
-	mkdir -p $(dir $(BINARY))
-	$(GO) build -o $(BINARY) ./cmd/server
+run-websearch:
+	cd websearch && \
+		WEBSEARCH_CORS_ALLOWED_ORIGINS="$(DEMO_ORIGINS)" \
+		WEBSEARCH_ALLOW_REQUEST_PROVIDERS="$(DEMO_WEBSEARCH_ALLOW_REQUEST_PROVIDERS)" \
+		WEBSEARCH_RESPONSE_PROVIDER_VISIBILITY="$(DEMO_WEBSEARCH_PROVIDER_VISIBILITY)" \
+		$(GO) run ./cmd/websearch-api -config config.yaml
 
-test: ## Run unit and integration tests
-	$(GO) test ./...
+run-webfetch:
+	cd webfetch && WEBFETCH_CORS_ALLOWED_ORIGINS="$(DEMO_ORIGINS)" $(GO) run ./cmd/webfetch-api -config config.yaml
 
-test-race: ## Run tests with the race detector
-	$(GO) test ./... -race
+run-demo:
+	cd demo && $(PYTHON) -m http.server 8090
 
-vet: ## Run Go static analysis
-	$(GO) vet ./...
+test:
+	cd runtime && go test ./...
+	cd websearch && go test ./...
+	cd webfetch && go test ./...
 
-check: test test-race vet build ## Run all verification steps
+test-race:
+	cd runtime && go test -race ./...
+	cd websearch && go test -race ./...
+	cd webfetch && go test -race ./...
 
-smoke: ## Query the running API (Q=golang)
-	./scripts/live-smoke.sh "$(Q)"
+vet:
+	cd runtime && go vet ./...
+	cd websearch && go vet ./...
+	cd webfetch && go vet ./...
 
-require-compose:
-	@if [ -z "$(COMPOSE)" ]; then echo "Docker Compose not found: install the plugin or docker-compose" >&2; exit 1; fi
+build:
+	cd websearch && go build -o ../bin/websearch-api ./cmd/websearch-api
+	cd webfetch && go build -o ../bin/webfetch-api ./cmd/webfetch-api
 
-docker-build: require-compose ## Build the Docker image
-	$(COMPOSE) build
-
-docker-up: require-compose ## Build and start the Docker service
-	$(COMPOSE) up -d --build
-
-docker-down: require-compose ## Stop containers and preserve volumes
-	$(COMPOSE) down
-
-docker-logs: require-compose ## Follow API container logs
-	$(COMPOSE) logs -f search-api
-
-docker-ps: require-compose ## Show Compose service status
-	$(COMPOSE) ps
-
-help: ## Show available targets
-	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\nTargets:\n"} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+check: test test-race vet build
