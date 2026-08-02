@@ -35,7 +35,7 @@ func cors(origins []string) gin.HandlerFunc {
 			if _, ok := allowed[origin]; ok {
 				c.Header("Access-Control-Allow-Origin", origin)
 				c.Header("Vary", "Origin")
-				c.Header("Access-Control-Allow-Headers", "Content-Type,X-Request-Id")
+				c.Header("Access-Control-Allow-Headers", "Content-Type,X-Request-Id,Authorization")
 				c.Header("Access-Control-Allow-Methods", "POST,OPTIONS")
 			}
 		}
