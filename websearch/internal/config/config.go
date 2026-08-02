@@ -20,6 +20,7 @@ type Config struct {
 	EnabledProviders          []string
 	ProviderVisibility        string
 	CORSAllowedOrigins        []string
+	APIKey                    string
 	Debug                     bool
 	DebugDir                  string
 	DebugPreviewBytes         int
@@ -118,6 +119,7 @@ func Load(paths ...string) (Config, error) {
 	config.Log.File = env.String("WEBSEARCH_LOG_FILE", config.Log.File)
 	config.EnabledProviders = env.CSV("WEBSEARCH_ENABLED_PROVIDERS", config.EnabledProviders)
 	config.CORSAllowedOrigins = env.CSV("WEBSEARCH_CORS_ALLOWED_ORIGINS", config.CORSAllowedOrigins)
+	config.APIKey = env.String("WEBSEARCH_API_KEY", config.APIKey)
 	var err error
 	for _, item := range []struct {
 		key    string

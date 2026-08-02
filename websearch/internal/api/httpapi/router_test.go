@@ -271,3 +271,45 @@ func TestSearchCORSPreflightForAllowedDemoOrigin(t *testing.T) {
 		t.Fatalf("status=%d allow-origin=%q", response.Code, response.Header().Get("Access-Control-Allow-Origin"))
 	}
 }
+
+func TestAPIKeyAuthProtectsBusinessRoutes(t *testing.T) {
+	searcher := &fakeSearcher{}
+	codec, _ := cursor.New("secret", time.Minute, time.Now)
+	router, err := New(Options{Searcher: searcher, Cursor: codec, Ready: func() bool { return true }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), EnabledProviders: []string{"bing"}, APIKey: "test-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/healthz", "/readyz"} {
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s status=%d body=%s", path, response.Code, response.Body.String())
+		}
+	}
+	denied := httptest.NewRecorder()
+	router.ServeHTTP(denied, httptest.NewRequest(http.MethodPost, "/v1/websearch", strings.NewReader(`{"query":"go","limit":1}`)))
+	if denied.Code != http.StatusUnauthorized {
+		t.Fatalf("no key status=%d body=%s", denied.Code, denied.Body.String())
+	}
+	allowed := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/websearch", strings.NewReader(`{"query":"go","limit":1}`))
+	request.Header.Set("Authorization", "Bearer test-key")
+	router.ServeHTTP(allowed, request)
+	if allowed.Code != http.StatusOK {
+		t.Fatalf("with key status=%d body=%s", allowed.Code, allowed.Body.String())
+	}
+}
+
+func TestAPIKeyAuthDisabledWhenEmpty(t *testing.T) {
+	searcher := &fakeSearcher{}
+	codec, _ := cursor.New("secret", time.Minute, time.Now)
+	router, err := New(Options{Searcher: searcher, Cursor: codec, Ready: func() bool { return true }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), EnabledProviders: []string{"bing"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/websearch", strings.NewReader(`{"query":"go","limit":1}`)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}

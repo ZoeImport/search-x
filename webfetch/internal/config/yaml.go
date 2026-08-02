@@ -18,6 +18,7 @@ type yamlConfig struct {
 		MaxTimeout         *string  `yaml:"max_timeout"`
 		CORSAllowedOrigins []string `yaml:"cors_allowed_origins"`
 		TrustedProxies     []string `yaml:"trusted_proxies"`
+		APIKey             *string  `yaml:"api_key"`
 	} `yaml:"server"`
 	HTTP struct {
 		Timeout       *string  `yaml:"timeout"`
@@ -102,6 +103,7 @@ func applyYAML(config *Config, path string) error {
 		return nil
 	}
 	setString(&config.Address, file.Server.Address)
+	setString(&config.APIKey, file.Server.APIKey)
 	setString(&config.UserAgent, file.HTTP.UserAgent)
 	setString(&config.RobotsPolicy, file.HTTP.RobotsPolicy)
 	if file.Server.CORSAllowedOrigins != nil {

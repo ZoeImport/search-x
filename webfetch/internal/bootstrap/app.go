@@ -80,7 +80,7 @@ func New(config config.Config, logger *slog.Logger) (*App, error) {
 		closeResources()
 		return nil, err
 	}
-	router, err := httpapi.New(httpapi.Options{Reader: service, Ready: func() bool { return true }, Logger: logger, Timeout: config.RequestTimeout, MaxTimeout: config.MaxRequestTimeout, CacheBypass: config.CacheBypass, LogURLQuery: config.LogStoreURLQuery, AllowedOrigins: config.CORSAllowedOrigins})
+	router, err := httpapi.New(httpapi.Options{Reader: service, Ready: func() bool { return true }, Logger: logger, Timeout: config.RequestTimeout, MaxTimeout: config.MaxRequestTimeout, CacheBypass: config.CacheBypass, LogURLQuery: config.LogStoreURLQuery, AllowedOrigins: config.CORSAllowedOrigins, APIKey: config.APIKey})
 	if err != nil {
 		closeResources()
 		return nil, err

@@ -36,6 +36,7 @@ type Options struct {
 	EnabledProviders      []string
 	ProviderVisibility    string
 	AllowedOrigins        []string
+	APIKey                string
 }
 
 type searchPayload struct {
@@ -116,6 +117,8 @@ func New(options Options) (*gin.Engine, error) {
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "ready"})
 	})
+	// healthz/readyz above stay unauthenticated for probes; business routes below require a key.
+	router.Use(apiKeyAuth(options.APIKey))
 	router.POST("/v1/websearch", func(c *gin.Context) {
 		var payload searchPayload
 		if err := decodeStrict(c.Request.Body, &payload); err != nil {

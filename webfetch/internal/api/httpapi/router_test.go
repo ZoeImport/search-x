@@ -86,3 +86,43 @@ func TestReadCORSPreflightForAllowedDemoOrigin(t *testing.T) {
 		t.Fatalf("status=%d allow-origin=%q", response.Code, response.Header().Get("Access-Control-Allow-Origin"))
 	}
 }
+
+func TestAPIKeyAuthProtectsBusinessRoutes(t *testing.T) {
+	reader := &fakeReader{}
+	router, err := New(Options{Reader: reader, Ready: func() bool { return true }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), APIKey: "test-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/healthz", "/readyz"} {
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s status=%d body=%s", path, response.Code, response.Body.String())
+		}
+	}
+	denied := httptest.NewRecorder()
+	router.ServeHTTP(denied, httptest.NewRequest(http.MethodPost, "/v1/webfetch", strings.NewReader(`{"url":"https://example.com"}`)))
+	if denied.Code != http.StatusUnauthorized {
+		t.Fatalf("no key status=%d body=%s", denied.Code, denied.Body.String())
+	}
+	allowed := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/webfetch", strings.NewReader(`{"url":"https://example.com"}`))
+	request.Header.Set("Authorization", "Bearer test-key")
+	router.ServeHTTP(allowed, request)
+	if allowed.Code != http.StatusOK {
+		t.Fatalf("with key status=%d body=%s", allowed.Code, allowed.Body.String())
+	}
+}
+
+func TestAPIKeyAuthDisabledWhenEmpty(t *testing.T) {
+	reader := &fakeReader{}
+	router, err := New(Options{Reader: reader, Ready: func() bool { return true }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/webfetch", strings.NewReader(`{"url":"https://example.com"}`)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}

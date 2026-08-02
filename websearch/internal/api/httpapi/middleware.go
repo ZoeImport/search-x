@@ -1,8 +1,12 @@
 package httpapi
 
 import (
-	"github.com/gin-gonic/gin"
+	"crypto/subtle"
+	"net/http"
 	"strings"
+
+	"github.com/gin-gonic/gin"
+
 	"web-search-backend/runtime/httpx"
 )
 
@@ -41,5 +45,26 @@ func cors(origins []string) gin.HandlerFunc {
 			return
 		}
 		c.Next()
+	}
+}
+
+// apiKeyAuth protects business routes with a Bearer token. It is a no-op when
+// expected is empty, so local development without a configured key keeps working.
+func apiKeyAuth(expected string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if expected == "" {
+			c.Next()
+			return
+		}
+		const prefix = "Bearer "
+		header := c.GetHeader("Authorization")
+		if len(header) > len(prefix) && strings.EqualFold(header[:len(prefix)], prefix) {
+			key := strings.TrimSpace(header[len(prefix):])
+			if len(key) > 0 && subtle.ConstantTimeCompare([]byte(key), []byte(expected)) == 1 {
+				c.Next()
+				return
+			}
+		}
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 	}
 }
