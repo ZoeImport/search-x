@@ -28,6 +28,7 @@ type Options struct {
 	CacheBypass    bool
 	LogURLQuery    bool
 	AllowedOrigins []string
+	APIKey         string
 }
 
 type readPayload struct {
@@ -95,6 +96,8 @@ func New(options Options) (*gin.Engine, error) {
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "ready"})
 	})
+	// healthz/readyz above stay unauthenticated for probes; business routes below require a key.
+	router.Use(apiKeyAuth(options.APIKey))
 	router.POST("/v1/webfetch", func(c *gin.Context) {
 		var payload readPayload
 		decoder := newStrictDecoder(c.Request.Body)

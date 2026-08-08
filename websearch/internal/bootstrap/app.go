@@ -51,7 +51,7 @@ func New(config config.Config, logger *slog.Logger) (*App, error) {
 		runtimeValue.Close()
 		return nil, err
 	}
-	router, err := httpapi.New(httpapi.Options{Searcher: service, Cursor: cursorCodec, Ready: runtimeValue.Ready, Logger: logger, Timeout: config.TotalTimeout, MaxTimeout: config.MaxRequestTimeout, CacheBypass: config.CacheBypass, AllowRequestProviders: config.AllowRequestProviders, EnabledProviders: config.EnabledProviders, ProviderVisibility: config.ProviderVisibility, AllowedOrigins: config.CORSAllowedOrigins})
+	router, err := httpapi.New(httpapi.Options{Searcher: service, Cursor: cursorCodec, Ready: runtimeValue.Ready, Logger: logger, Timeout: config.TotalTimeout, MaxTimeout: config.MaxRequestTimeout, CacheBypass: config.CacheBypass, AllowRequestProviders: config.AllowRequestProviders, EnabledProviders: config.EnabledProviders, ProviderVisibility: config.ProviderVisibility, AllowedOrigins: config.CORSAllowedOrigins, APIKey: config.APIKey})
 	if err != nil {
 		runtimeValue.Close()
 		return nil, err

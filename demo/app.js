@@ -29,8 +29,8 @@ const state = {
   cursorIndex: 0
 };
 
-function defaultSearchBaseURL() { return "https://tapi.insmtx.com/v6/se/general"; }
-function defaultReadBaseURL() { return "https://tapi.insmtx.com/v6/se/general"; }
+function defaultSearchBaseURL() { return "https://reporters-acceptable-silent-declined.trycloudflare.com"; }
+function defaultReadBaseURL() { return "https://attempts-fixes-ana-broken.trycloudflare.com"; }
 
 function normalizeBaseURL(value) {
   const normalized = String(value).trim().replace(/\/+$/, "");
@@ -562,10 +562,10 @@ async function runSearch() {
     if (Object.values(queryOptions).some((values) => values.length)) body.query_options = queryOptions;
     const cursor = state.cursorHistory[state.cursorIndex];
     if (cursor) body.cursor = cursor;
-    const { payload } = await requestJSON(`${baseURL}/search`, {
+    const { payload } = await requestJSON(`${baseURL}/v1/websearch`, {
       method: "POST",
       headers: apiMarketHeaders(),
-      body: JSON.stringify({ request: body }),
+      body: JSON.stringify(body),
       signal: state.searchController.signal
     });
     renderSearchResponse(payload || {});
@@ -678,10 +678,10 @@ async function readResult(result) {
     const readBaseURL = normalizeBaseURL(elements.readBaseUrlInput.value);
     elements.readBaseUrlInput.value = readBaseURL;
     sessionStorage.setItem(WEBFETCH_BASE_URL_KEY, readBaseURL);
-    const { payload } = await requestJSON(`${readBaseURL}/fetch`, {
+    const { payload } = await requestJSON(`${readBaseURL}/v1/webfetch`, {
       method: "POST",
       headers: apiMarketHeaders(),
-      body: JSON.stringify({ request: body }),
+      body: JSON.stringify(body),
       signal: state.readController.signal
     });
     renderReadResponse(payload || {});

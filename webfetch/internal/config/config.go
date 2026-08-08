@@ -34,6 +34,7 @@ type Config struct {
 	UserAgent          string
 	CORSAllowedOrigins []string
 	TrustedProxies     []string
+	APIKey             string
 	Log                logging.Config
 }
 
@@ -62,6 +63,7 @@ func Load(paths ...string) (Config, error) {
 	config.HostAllowlist = env.CSV("WEBFETCH_HOST_ALLOWLIST", config.HostAllowlist)
 	config.CORSAllowedOrigins = env.CSV("WEBFETCH_CORS_ALLOWED_ORIGINS", config.CORSAllowedOrigins)
 	config.TrustedProxies = env.CSV("WEBFETCH_TRUSTED_PROXIES", config.TrustedProxies)
+	config.APIKey = env.String("WEBFETCH_API_KEY", config.APIKey)
 	var err error
 	if config.RequestTimeout, err = env.PositiveDuration("WEBFETCH_REQUEST_TIMEOUT", config.RequestTimeout); err != nil {
 		return Config{}, err

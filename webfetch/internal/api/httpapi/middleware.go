@@ -1,10 +1,12 @@
 package httpapi
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -42,7 +44,7 @@ func cors(origins []string) gin.HandlerFunc {
 			if _, ok := allowed[origin]; ok {
 				c.Header("Access-Control-Allow-Origin", origin)
 				c.Header("Vary", "Origin")
-				c.Header("Access-Control-Allow-Headers", "Content-Type,X-Request-Id")
+				c.Header("Access-Control-Allow-Headers", "Content-Type,X-Request-Id,Authorization")
 				c.Header("Access-Control-Allow-Methods", "POST,OPTIONS")
 			}
 		}
@@ -52,6 +54,27 @@ func cors(origins []string) gin.HandlerFunc {
 			return
 		}
 		c.Next()
+	}
+}
+
+// apiKeyAuth protects business routes with a Bearer token. It is a no-op when
+// expected is empty, so local development without a configured key keeps working.
+func apiKeyAuth(expected string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if expected == "" {
+			c.Next()
+			return
+		}
+		const prefix = "Bearer "
+		header := c.GetHeader("Authorization")
+		if len(header) > len(prefix) && strings.EqualFold(header[:len(prefix)], prefix) {
+			key := strings.TrimSpace(header[len(prefix):])
+			if len(key) > 0 && subtle.ConstantTimeCompare([]byte(key), []byte(expected)) == 1 {
+				c.Next()
+				return
+			}
+		}
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 	}
 }
 

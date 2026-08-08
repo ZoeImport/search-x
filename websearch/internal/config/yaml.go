@@ -25,6 +25,7 @@ type yamlConfig struct {
 		AllowRequestProviders *bool    `yaml:"allow_request_providers"`
 		ProviderVisibility    *string  `yaml:"provider_visibility"`
 		CacheBypass           *bool    `yaml:"cache_bypass"`
+		APIKey                *string  `yaml:"api_key"`
 	} `yaml:"api"`
 	Cache struct {
 		FreshTTL *string `yaml:"fresh_ttl"`
@@ -151,6 +152,7 @@ func applyYAML(config *Config, path string) error {
 	setString(&config.Address, file.Server.Address)
 	setString(&config.CursorSecret, file.API.CursorKey)
 	setString(&config.ProviderVisibility, file.API.ProviderVisibility)
+	setString(&config.APIKey, file.API.APIKey)
 	setBool(&config.AllowRequestProviders, file.API.AllowRequestProviders)
 	setBool(&config.CacheBypass, file.API.CacheBypass)
 	if file.API.EnabledProviders != nil {
