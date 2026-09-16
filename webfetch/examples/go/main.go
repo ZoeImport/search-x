@@ -5,22 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"time"
 )
 
 func main() {
-	apiKey := os.Getenv("API_KEY")
-	if apiKey == "" {
-		panic("API_KEY is required")
-	}
-	body := []byte(`{"request":{"url":"https://go.dev/doc/","timeout":"20s","output":{"format":"markdown","max_chars":30000}}}`)
+	body := []byte(`{"url":"https://go.dev/doc/","timeout":"20s","output":{"format":"markdown","max_chars":30000}}`)
 	client := &http.Client{Timeout: 25 * time.Second}
-	request, err := http.NewRequest(http.MethodPost, "https://tapi.insmtx.com/v6/se/general/fetch", bytes.NewReader(body))
+	request, err := http.NewRequest(http.MethodPost, "https://tapi.juxonmedia.com/v1/webfetch", bytes.NewReader(body))
 	if err != nil {
 		panic(err)
 	}
-	request.Header.Set("Authorization", "Bearer "+apiKey)
 	request.Header.Set("Content-Type", "application/json")
 	response, err := client.Do(request)
 	if err != nil {

@@ -94,10 +94,16 @@ func TestChainFallsBackOnEmptyResults(t *testing.T) {
 	first := &chainStub{name: domain.ProviderNameBaidu, response: domain.SearchResponse{Provider: domain.ProviderNameBaidu, Results: []domain.SearchResult{}}}
 	second := &chainStub{name: domain.ProviderNameBing, response: domain.SearchResponse{Provider: domain.ProviderNameBing, Results: []domain.SearchResult{{Title: "Go"}}}}
 	chain, err := NewChain(domain.ProviderNameAuto, first, second)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	response, err := chain.Search(context.Background(), domain.SearchRequest{})
-	if err != nil { t.Fatal(err) }
-	if response.Provider != domain.ProviderNameBing || first.calls != 1 || second.calls != 1 || response.Meta.ProviderFallbackCount != 1 { t.Fatalf("response=%+v calls=%d,%d", response, first.calls, second.calls) }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Provider != domain.ProviderNameBing || first.calls != 1 || second.calls != 1 || response.Meta.ProviderFallbackCount != 1 {
+		t.Fatalf("response=%+v calls=%d,%d", response, first.calls, second.calls)
+	}
 }
 
 func TestChainStopsOnNonRetryableProviderError(t *testing.T) {

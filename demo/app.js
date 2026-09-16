@@ -2,10 +2,9 @@
 
 const WEBSEARCH_BASE_URL_KEY = "searchroom.searchBaseUrl";
 const WEBFETCH_BASE_URL_KEY = "searchroom.readBaseUrl";
-const API_KEY_SESSION_KEY = "searchroom.apiKey";
 
 const elements = Object.fromEntries([
-  "searchForm", "queryInput", "apiKeyInput", "baseUrlInput", "providerInput", "regionInput", "limitInput",
+  "searchForm", "queryInput", "baseUrlInput", "providerInput", "regionInput", "limitInput",
   "includeDomainsInput", "excludeDomainsInput", "exactPhrasesInput", "anyTermsInput", "excludeTermsInput", "titleTermsInput", "fileTypesInput",
   "searchButton", "healthStatus",
   "searchStatus", "searchMeta", "searchNotices", "resultsList", "resultCount", "pagination",
@@ -29,8 +28,8 @@ const state = {
   cursorIndex: 0
 };
 
-function defaultSearchBaseURL() { return "https://tapi.insmtx.com/v6/se/general"; }
-function defaultReadBaseURL() { return "https://tapi.insmtx.com/v6/se/general"; }
+function defaultSearchBaseURL() { return "https://tapi.juxonmedia.com/v1"; }
+function defaultReadBaseURL() { return "https://tapi.juxonmedia.com/v1"; }
 
 function normalizeBaseURL(value) {
   const normalized = String(value).trim().replace(/\/+$/, "");
@@ -291,30 +290,10 @@ async function requestJSON(url, options = {}) {
     throw error;
   }
 
-  if (payload && typeof payload === "object" && Object.hasOwn(payload, "code")) {
-    const code = Number(payload.code || 0);
-    if (code !== 0) {
-      const error = new Error(payload.message || `API Market error ${code}`);
-      error.status = response.status;
-      error.payload = payload;
-      error.rawText = rawText;
-      throw error;
-    }
-    payload = payload.response ?? {};
-  }
-
   return { payload, status: response.status, rawText };
 }
 
-function apiMarketHeaders() {
-  const apiKey = elements.apiKeyInput.value.trim();
-  if (!apiKey) throw new Error("请输入 API Market Key");
-  sessionStorage.setItem(API_KEY_SESSION_KEY, apiKey);
-  return {
-    "Authorization": `Bearer ${apiKey}`,
-    "Content-Type": "application/json"
-  };
-}
+function jsonHeaders() { return {"Content-Type": "application/json"}; }
 
 function addMeta(container, label, value, accent = false) {
   const chip = create("span", `meta-chip${accent ? " is-accent" : ""}`);
@@ -562,10 +541,10 @@ async function runSearch() {
     if (Object.values(queryOptions).some((values) => values.length)) body.query_options = queryOptions;
     const cursor = state.cursorHistory[state.cursorIndex];
     if (cursor) body.cursor = cursor;
-    const { payload } = await requestJSON(`${baseURL}/search`, {
+    const { payload } = await requestJSON(`${baseURL}/websearch`, {
       method: "POST",
-      headers: apiMarketHeaders(),
-      body: JSON.stringify({ request: body }),
+      headers: jsonHeaders(),
+      body: JSON.stringify(body),
       signal: state.searchController.signal
     });
     renderSearchResponse(payload || {});
@@ -678,10 +657,10 @@ async function readResult(result) {
     const readBaseURL = normalizeBaseURL(elements.readBaseUrlInput.value);
     elements.readBaseUrlInput.value = readBaseURL;
     sessionStorage.setItem(WEBFETCH_BASE_URL_KEY, readBaseURL);
-    const { payload } = await requestJSON(`${readBaseURL}/fetch`, {
+    const { payload } = await requestJSON(`${readBaseURL}/webfetch`, {
       method: "POST",
-      headers: apiMarketHeaders(),
-      body: JSON.stringify({ request: body }),
+      headers: jsonHeaders(),
+      body: JSON.stringify(body),
       signal: state.readController.signal
     });
     renderReadResponse(payload || {});
@@ -713,7 +692,6 @@ function changePage(delta) {
 function initialize() {
   elements.baseUrlInput.value = sessionStorage.getItem(WEBSEARCH_BASE_URL_KEY) || defaultSearchBaseURL();
   elements.readBaseUrlInput.value = sessionStorage.getItem(WEBFETCH_BASE_URL_KEY) || defaultReadBaseURL();
-  elements.apiKeyInput.value = sessionStorage.getItem(API_KEY_SESSION_KEY) || "";
 
   elements.searchForm.addEventListener("submit", (event) => {
     event.preventDefault();
