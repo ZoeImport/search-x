@@ -3,6 +3,7 @@ WORKDIR /src
 COPY go.work go.work.sum ./
 COPY runtime/go.mod runtime/go.sum runtime/
 COPY webfetch/go.mod webfetch/go.sum webfetch/
+COPY websearch/go.mod websearch/go.sum websearch/
 RUN cd webfetch && go mod download
 COPY runtime runtime
 COPY webfetch webfetch
