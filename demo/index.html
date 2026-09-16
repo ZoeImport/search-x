@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>Searchroom · API Market 测试控制台</title>
+  <title>Searchroom · Search-X 测试控制台</title>
   <link rel="stylesheet" href="./app.css">
 </head>
 <body>
@@ -16,7 +16,7 @@
       <span class="brand-mark">S</span>
       <span>
         <strong>Searchroom</strong>
-        <small>API MARKET TEST CONSOLE</small>
+        <small>SEARCH-X TEST CONSOLE</small>
       </span>
     </a>
     <div class="health" id="healthStatus">
@@ -29,7 +29,7 @@
     <section class="hero" aria-labelledby="pageTitle">
       <p class="eyebrow">Search · Inspect · Read</p>
       <h1 id="pageTitle">从结果到正文，<br><em>保持每一步可见。</em></h1>
-      <p class="hero-copy">面向 API Market 测试环境的搜索工作台。选择 Provider、检查搜索响应，再读取标准化正文。</p>
+      <p class="hero-copy">面向 Search-X 测试环境的搜索工作台。选择 Provider、检查搜索响应，再读取标准化正文。</p>
     </section>
 
     <section class="search-panel panel" aria-label="搜索参数">
@@ -47,13 +47,9 @@
         </div>
 
         <div class="parameter-grid">
-          <label class="field api-key-field">
-            <span>API Market Key（仅保存在当前标签页）</span>
-            <input id="apiKeyInput" type="password" autocomplete="off" spellcheck="false" placeholder="Bearer API Key">
-          </label>
           <label class="field">
             <span>Search API Base URL</span>
-            <input id="baseUrlInput" type="url" spellcheck="false" placeholder="https://tapi.insmtx.com/v6/se/general">
+            <input id="baseUrlInput" type="url" spellcheck="false" placeholder="https://tapi.juxonmedia.com/v1">
           </label>
           <label class="field">
             <span>Provider</span>
@@ -160,7 +156,7 @@
           <div class="read-controls">
             <label class="field">
               <span>Read API Base URL</span>
-              <input id="readBaseUrlInput" type="url" spellcheck="false" placeholder="https://tapi.insmtx.com/v6/se/general">
+              <input id="readBaseUrlInput" type="url" spellcheck="false" placeholder="https://tapi.juxonmedia.com/v1">
             </label>
             <label class="field">
               <span>Format</span>
@@ -178,7 +174,7 @@
           <div class="reader-empty" id="readerEmpty">
             <span class="reader-glyph">Aa</span>
             <strong>选择一条搜索结果</strong>
-            <p>系统会调用测试环境 <code>POST /v6/se/general/fetch</code>，在这里展示正文、提取方式与原始错误。</p>
+            <p>系统会调用测试环境 <code>POST /v1/webfetch</code>，在这里展示正文、提取方式与原始错误。</p>
           </div>
 
           <div class="reader-content is-hidden" id="readerContent">

@@ -79,11 +79,11 @@ Brave Web Search 是 `GET https://api.search.brave.com/res/v1/web/search`（官�
 第一版建议保持：
 
 ```text
-POST /v6/se/general/search
-POST /v6/se/general/fetch
+POST /v1/websearch
+POST /v1/webfetch
 ```
 
-公开路由由 API Market 的 `/v6` 网关版本承载，业务参数位于 `request` 字段，业务响应位于 `response` 字段。内部后端仍可独立演进 `/v1/websearch` 与 `/v1/webfetch`，但不作为客户端测试入口。维护 changelog、OpenAPI、deprecation date 与 sunset header。Exa 的公开参考中已经展示字段级 deprecated，这是值得采用的演进信号。[Exa Search Reference](https://exa.ai/docs/reference/search)
+公共测试路由与集群内 Service 使用同一个直接 JSON 契约，避免维护额外网关包装。版本演进应维护 changelog、OpenAPI、deprecation date 与 sunset header。Exa 的公开参考中已经展示字段级 deprecated，这是值得采用的演进信号。[Exa Search Reference](https://exa.ai/docs/reference/search)
 
 ### 4.2 Search request
 

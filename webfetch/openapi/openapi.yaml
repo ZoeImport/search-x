@@ -2,21 +2,19 @@ openapi: 3.1.0
 info:
   title: WebFetch API
   version: 1.0.0
-  description: API Market test contract for the WebFetch single URL reader.
+  description: Search-X single URL reader API.
 servers:
-  - url: https://tapi.insmtx.com/v6/se/general
+  - url: https://tapi.juxonmedia.com
 paths:
-  /fetch:
+  /v1/webfetch:
     post:
       operationId: webfetch
       summary: Read one public URL
-      security:
-        - bearerAuth: []
       requestBody:
         required: true
         content:
           application/json:
-            schema: {$ref: '#/components/schemas/MarketReadRequest'}
+            schema: {$ref: '#/components/schemas/ReadRequest'}
       responses:
         '200':
           description: Extracted document
@@ -24,7 +22,7 @@ paths:
             X-Request-Id: {schema: {type: string}}
           content:
             application/json:
-              schema: {$ref: '#/components/schemas/MarketReadResponse'}
+              schema: {$ref: '#/components/schemas/ReadResponse'}
         '400': {$ref: '#/components/responses/Problem'}
         '403': {$ref: '#/components/responses/Problem'}
         '413': {$ref: '#/components/responses/Problem'}
@@ -33,24 +31,7 @@ paths:
         '502': {$ref: '#/components/responses/Problem'}
         '504': {$ref: '#/components/responses/Problem'}
 components:
-  securitySchemes:
-    bearerAuth:
-      type: http
-      scheme: bearer
   schemas:
-    MarketReadRequest:
-      type: object
-      additionalProperties: false
-      required: [request]
-      properties:
-        request: {$ref: '#/components/schemas/ReadRequest'}
-    MarketReadResponse:
-      type: object
-      required: [code, message, response]
-      properties:
-        code: {type: integer, const: 0}
-        message: {type: string}
-        response: {$ref: '#/components/schemas/ReadResponse'}
     ReadRequest:
       type: object
       additionalProperties: false

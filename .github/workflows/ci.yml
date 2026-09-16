@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Exact Git ref to verify
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: search-x-ci-${{ inputs.ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: 1
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.work
+          cache-dependency-path: |
+            runtime/go.sum
+            websearch/go.sum
+            webfetch/go.sum
+      - name: Verify formatting
+        shell: bash
+        run: test -z "$(gofmt -l runtime websearch webfetch)"
+      - name: Verify modules
+        run: |
+          (cd runtime && go mod verify)
+          (cd websearch && go mod verify)
+          (cd webfetch && go mod verify)
+      - name: Run canonical checks
+        run: make check
+      - name: Record source
+        run: printf 'source_sha=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"

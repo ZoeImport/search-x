@@ -10,7 +10,7 @@
 
 ## Provider Profile Matrix
 
-Internal Search benchmark endpoint: `POST /v1/websearch`, local 50 ms upstream delay, trace off. This is not the API Market client route.
+WebSearch benchmark endpoint: `POST /v1/websearch`, local 50 ms upstream delay, trace off.
 
 | Provider | Profile setting | Concurrency | Requests | Success | Mean | p50 | p95 | p99 | Verdict |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---|
@@ -50,7 +50,7 @@ Auto mode can absorb more local load when all provider capacities are raised, bu
 
 ## Read Matrix
 
-Internal benchmark endpoint: `POST /v1/webfetch`, unique URLs, local 50 ms upstream delay. This is not the API Market client route.
+WebFetch benchmark endpoint: `POST /v1/webfetch`, unique URLs, local 50 ms upstream delay.
 
 | Read mode | Slots | Wait | Concurrency | Requests | Success | Mean | p50 | p95 | Transport |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---|

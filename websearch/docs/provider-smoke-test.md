@@ -2,7 +2,7 @@
 
 测试时间：2026-07-16（Asia/Shanghai）
 
-运行方式：根目录 `make run`，直接请求内部后端 `POST /v1/websearch`，query=`golang`。高级搜索与分页另外通过 API Market `POST /v6/se/general/search`、本地 Executor 和当前 Backend 完成端到端验收。
+运行方式：根目录 `make run`，直接请求 `POST /v1/websearch`，query=`golang`。高级搜索与分页通过同一 Search-X API 完成端到端验收。
 
 | Provider | HTTP | 结果 | 判定 |
 | --- | ---: | --- | --- |
@@ -15,7 +15,7 @@
 
 ## Advanced search acceptance
 
-API Market 端到端实测覆盖：
+Search-X 端到端实测覆盖：
 
 - `filters.include_domains` / `exclude_domains`
 - `query_options.exact_phrases` / `any_terms` / `exclude_terms`
@@ -25,6 +25,6 @@ API Market 端到端实测覆盖：
 - DuckDuckGo continuation cursor
 - cursor fingerprint mismatch
 
-DuckDuckGo 第一页返回 `go.dev/`、`go.dev/doc/`，第二页返回 `go.dev/doc/go1.26`、`exercism.org/tracks/go`，两页 canonical URL 交集为空。修改 cursor 所绑定的 query options 后，API Market 返回参数错误码 `1001400`。
+DuckDuckGo 第一页返回 `go.dev/`、`go.dev/doc/`，第二页返回 `go.dev/doc/go1.26`、`exercism.org/tracks/go`，两页 canonical URL 交集为空。修改 cursor 所绑定的 query options 后，Search-X 返回 `cursor_mismatch`。
 
 Brave 的普通查询与高级查询在当前出口均被上游挑战，说明该现象不是高级搜索 operator compiler 引入的差异。服务不会通过额外错误 `curl` 探测或复用挑战页面；挑战响应会映射为 `captcha_required`，Profile Pool 再依据请求结果、健康度和生命周期处理对应 profile。

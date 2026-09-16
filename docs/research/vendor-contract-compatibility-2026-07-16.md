@@ -21,10 +21,10 @@
 
 | 能力 | Exa | Tavily | Firecrawl v2 | 本项目当前契约 |
 |---|---|---|---|---|
-| Search endpoint | `POST /search` | `POST /search` | `POST /v2/search` | `POST /v6/se/general/search` |
-| Search 请求主体 | 直接 JSON；`query`、`numResults`、domain/date filters、可选 `contents` | 直接 JSON；`query`、`max_results`、domain/date/topic filters、可选 raw content | 直接 JSON；`query`、`limit`、domain/location/source filters、可选 `scrapeOptions` | API Market `request` 内为 `query`、`limit`、`cursor`、`routing`、`filters.region` |
+| Search endpoint | `POST /search` | `POST /search` | `POST /v2/search` | `POST /v1/websearch` |
+| Search 请求主体 | 直接 JSON；`query`、`numResults`、domain/date filters、可选 `contents` | 直接 JSON；`query`、`max_results`、domain/date/topic filters、可选 raw content | 直接 JSON；`query`、`limit`、domain/location/source filters、可选 `scrapeOptions` | 直接 JSON；`query`、`limit`、`cursor`、`routing`、`filters.region` |
 | Search 结果 | `results[]`，含 URL/title/id/作者/发布时间；顶层 `requestId`、`costDollars` | `results[]`，含 URL/title/content/score；顶层 `query`、`request_id`、`response_time`、可选 usage | `data.web[]`，含 URL/title/description；顶层 `id`、`creditsUsed` | `results[]`，含 URL/title/snippet/rank/id；顶层 `request_id`、`query`、`page`、`meta` |
-| URL 内容 endpoint | `POST /contents` | `POST /extract` | `POST /v2/scrape` | `POST /v6/se/general/fetch` |
+| URL 内容 endpoint | `POST /contents` | `POST /extract` | `POST /v2/scrape` | `POST /v1/webfetch` |
 | URL 输入 | `urls[]` / `ids[]`，1..100 | `urls` 可为 string 或 array，最多 20 | 单个 `url` | 单个 `url` |
 | 内容响应 | `results[]` + 每 URL `statuses[]` + `requestId` | `results[]` + `failed_results[]` + `request_id` | `success` + `data`，正文按 formats 返回 | `request_id` + 单个 `document` + `meta` + `warnings` |
 
@@ -47,7 +47,7 @@
 
 ### Fetch request / response
 
-- 当前单 URL、同步 `/v6/se/general/fetch` 与 Firecrawl `/v2/scrape` 的产品边界一致；Exa/Tavily 支持批量并不意味着当前版本必须批量化。本期保持单 URL 能降低超时和部分失败复杂度。[Exa Contents](https://exa.ai/docs/reference/contents-api-guide-for-coding-agents) [Tavily Extract](https://docs.tavily.com/documentation/api-reference/endpoint/extract) [Firecrawl Scrape](https://docs.firecrawl.dev/api-reference/endpoint/scrape)
+- 当前单 URL、同步 `/v1/webfetch` 与 Firecrawl `/v2/scrape` 的产品边界一致；Exa/Tavily 支持批量并不意味着当前版本必须批量化。本期保持单 URL 能降低超时和部分失败复杂度。[Exa Contents](https://exa.ai/docs/reference/contents-api-guide-for-coding-agents) [Tavily Extract](https://docs.tavily.com/documentation/api-reference/endpoint/extract) [Firecrawl Scrape](https://docs.firecrawl.dev/api-reference/endpoint/scrape)
 - `output.format: markdown|text` 与 Tavily Extract 一致；`max_chars` 是本项目有价值的响应预算控制，可以保留。
 - 单文档响应使用 `document` 而不是 `results[]` 是合理且强类型的，不需要为了表面相似改成数组。未来若增加批量，应新增 batch endpoint 或新版本，并像 Exa/Tavily 一样表达逐 URL 成功与失败，不能把现有 `url: string` 改成 `string|string[]`。
 - 建议为 `document` 增加 optional `content_type` 和 `status_code`；Firecrawl 在 `metadata` 中公开这两项，有助于客户判断实际读取内容。[Firecrawl Scrape](https://docs.firecrawl.dev/api-reference/endpoint/scrape)
