@@ -38,17 +38,18 @@ type Config struct {
 }
 
 type Client struct {
-	config        Config
-	urlBuilder    URLBuilder
-	allocatorCtx  context.Context
-	allocatorStop context.CancelFunc
-	browserCtx    context.Context
-	browserStop   context.CancelFunc
-	browserInit   func(context.Context) error
-	browserInitMu sync.Mutex
-	browserReady  bool
-	semaphore     chan struct{}
-	closeOnce     sync.Once
+	config         Config
+	urlBuilder     URLBuilder
+	allocatorCtx   context.Context
+	allocatorStop  context.CancelFunc
+	browserCtx     context.Context
+	browserStop    context.CancelFunc
+	browserInit    func(context.Context) error
+	browserInitMu  sync.Mutex
+	browserReady   bool
+	browserInitErr error
+	semaphore      chan struct{}
+	closeOnce      sync.Once
 }
 
 func New(config Config, urlBuilder URLBuilder) (*Client, error) {
@@ -255,11 +256,15 @@ func (c *Client) ensureBrowser() error {
 	if c.browserReady {
 		return nil
 	}
+	if c.browserInitErr != nil {
+		return c.browserInitErr
+	}
 	if c.browserInit == nil {
 		return fmt.Errorf("chromedp browser initializer is nil")
 	}
 	if err := c.browserInit(c.browserCtx); err != nil {
-		return err
+		c.browserInitErr = err
+		return c.browserInitErr
 	}
 	c.browserReady = true
 	return nil
